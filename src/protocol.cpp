@@ -5,6 +5,8 @@
 
 #include <protocol.h>
 
+#include <compaction/params.h>
+
 #include <util.h>
 #include <utilstrencodings.h>
 
@@ -41,6 +43,10 @@ const char *SENDCMPCT="sendcmpct";
 const char *CMPCTBLOCK="cmpctblock";
 const char *GETBLOCKTXN="getblocktxn";
 const char *BLOCKTXN="blocktxn";
+#ifdef COMSYS_COMPACTION
+const char *GETSTATE="getstate";
+const char *STATE="state";
+#endif
 } // namespace NetMsgType
 
 /** All known message types. Keep this in the same order as the list of
@@ -73,6 +79,10 @@ const static std::string allNetMessageTypes[] = {
     NetMsgType::CMPCTBLOCK,
     NetMsgType::GETBLOCKTXN,
     NetMsgType::BLOCKTXN,
+#ifdef COMSYS_COMPACTION
+    NetMsgType::GETSTATE,
+    NetMsgType::STATE,
+#endif
 };
 const static std::vector<std::string> allNetMessageTypesVec(allNetMessageTypes, allNetMessageTypes+ARRAYLEN(allNetMessageTypes));
 
@@ -130,10 +140,24 @@ bool CMessageHeader::IsValid(const MessageStartChars& pchMessageStartIn) const
 
 
 ServiceFlags GetDesirableServiceFlags(ServiceFlags services) {
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    if ((services & NODE_NETWORK_LIMITED) && g_initial_block_download_completed) {
+        return ServiceFlags(NODE_COMSYS_COMPACTION | NODE_NETWORK_LIMITED | NODE_WITNESS);
+    }
+    return ServiceFlags(NODE_COMSYS_COMPACTION | NODE_NETWORK | NODE_WITNESS);
+#  else
     if ((services & NODE_NETWORK_LIMITED) && g_initial_block_download_completed) {
         return ServiceFlags(NODE_NETWORK_LIMITED | NODE_WITNESS);
     }
     return ServiceFlags(NODE_NETWORK | NODE_WITNESS);
+#  endif
+#else
+    if ((services & NODE_NETWORK_LIMITED) && g_initial_block_download_completed) {
+        return ServiceFlags(NODE_NETWORK_LIMITED | NODE_WITNESS);
+    }
+    return ServiceFlags(NODE_NETWORK | NODE_WITNESS);
+#endif
 }
 
 void SetServiceFlagsIBDCache(bool state) {

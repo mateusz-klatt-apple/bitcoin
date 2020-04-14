@@ -7,6 +7,11 @@
 #include <config/bitcoin-config.h>
 #endif
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#  include <compaction/evaluation.h>
+#endif
+
 #include <net.h>
 
 #include <chainparams.h>
@@ -1272,6 +1277,15 @@ void CConnman::ThreadSocketHandler()
                     LOCK(pnode->cs_vSend);
                     select_send = !pnode->vSendMsg.empty();
                 }
+#ifdef COMSYS_COMPACTION
+                // Manually disable sending or receiving if we're halting due to pending state creation
+                if (pnode->fHaltRecvEffective) {
+                    select_recv = false;
+                }
+                if (pnode->fHaltSend) {
+                    select_send = false;
+                }
+#endif
 
                 LOCK(pnode->cs_hSocket);
                 if (pnode->hSocket == INVALID_SOCKET)
@@ -1310,6 +1324,32 @@ void CConnman::ThreadSocketHandler()
             if (!interruptNet.sleep_for(std::chrono::milliseconds(timeout.tv_usec/1000)))
                 return;
         }
+#ifdef COMSYS_COMPACTION
+        // Check whether we need to halt communication for pending state creation
+        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: STATE: Checking whether I want to create a state: %u.\n", __FILE__, __func__, __LINE__, CompactionState::checkWantToCreateState());
+        if (CompactionState::checkWantToCreateState()) {
+            if (CompactionState::checkCanCreateState()) {
+#  ifdef ENABLE_EVALUATION
+                if (eval_last_state_height >= eval_start_state_height) {
+#  endif
+                CompactionState::createStateDelayed();
+#  ifdef ENABLE_EVALUATION
+                    if (evalp_saving_potential != nullptr && evalp_saving_potential->isActive()) {
+                        evalp_saving_potential->doPreparedMeasurement();
+                    }
+                }
+#  endif
+#ifdef ENABLE_EVALUATION
+            } else if (eval_last_state_height >= eval_start_state_height) {
+#else
+            } else {
+#endif
+                ForEachNode(CompactionState::haltSending);
+                ForEachNode(CompactionState::haltReceiving);
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: STATE: Halted communication. Checking whether I can create the state now: %u.\n", __FILE__, __func__, __LINE__, CompactionState::checkCanCreateState());
+            }
+        }
+#endif
 
         //
         // Accept new connections
@@ -1409,7 +1449,11 @@ void CConnman::ThreadSocketHandler()
             //
             // Send
             //
+#ifdef COMSYS_COMPACTION
+            if (sendSet && !pnode->fHaltSend)
+#else
             if (sendSet)
+#endif
             {
                 LOCK(pnode->cs_vSend);
                 size_t nBytes = SocketSendData(pnode);
@@ -1429,7 +1473,11 @@ void CConnman::ThreadSocketHandler()
                     LogPrint(BCLog::NET, "socket no message in first 60 seconds, %d %d from %d\n", pnode->nLastRecv != 0, pnode->nLastSend != 0, pnode->GetId());
                     pnode->fDisconnect = true;
                 }
+#ifdef COMSYS_COMPACTION
+                else if (!pnode->fHaltSend && nTime - pnode->nLastSend > TIMEOUT_INTERVAL)
+#else
                 else if (nTime - pnode->nLastSend > TIMEOUT_INTERVAL)
+#endif
                 {
                     LogPrintf("socket sending timeout: %is\n", nTime - pnode->nLastSend);
                     pnode->fDisconnect = true;
@@ -2044,11 +2092,21 @@ void CConnman::ThreadMessageHandler()
                 continue;
 
             // Receive messages
+#ifdef COMSYS_COMPACTION
+            if (pnode->fHaltRecv)
+                continue;
+#endif
             bool fMoreNodeWork = m_msgproc->ProcessMessages(pnode, flagInterruptMsgProc);
             fMoreWork |= (fMoreNodeWork && !pnode->fPauseSend);
+#ifdef COMSYS_COMPACTION
+            fMoreWork &= !CompactionState::checkWantToCreateState();
+#endif
             if (flagInterruptMsgProc)
                 return;
             // Send messages
+#ifdef COMSYS_COMPACTION
+            if (!pnode->fHaltSend)
+#endif
             {
                 LOCK(pnode->cs_sendProcessing);
                 m_msgproc->SendMessages(pnode);
@@ -2066,6 +2124,16 @@ void CConnman::ThreadMessageHandler()
 
         std::unique_lock<std::mutex> lock(mutexMsgProc);
         if (!fMoreWork) {
+#ifdef COMSYS_COMPACTION
+            {
+                LOCK(cs_vNodes);
+                for (CNode* pnode : vNodesCopy) {
+                    if (pnode->fHaltRecv) {
+                        pnode->fHaltRecvEffective = true;
+                    }
+                }
+            }
+#endif
             condMsgProc.wait_until(lock, std::chrono::steady_clock::now() + std::chrono::milliseconds(100), [this] { return fMsgProcWake; });
         }
         fMsgProcWake = false;
@@ -2694,7 +2762,15 @@ void CConnman::SetBestHeight(int height)
 
 int CConnman::GetBestHeight() const
 {
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+    return eval_state_height + eval_tail_length;
+#  else
     return nBestHeight.load(std::memory_order_acquire);
+#  endif
+#else
+    return nBestHeight.load(std::memory_order_acquire);
+#endif
 }
 
 unsigned int CConnman::GetReceiveFloodSize() const { return nReceiveFloodSize; }
@@ -2760,6 +2836,14 @@ CNode::CNode(NodeId idIn, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn
     fPauseRecv = false;
     fPauseSend = false;
     nProcessQueueSize = 0;
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    number_requested_state_chunks = 0;
+    fHaltRecv = false;
+    fHaltRecvEffective = false;
+    fHaltSend = false;
+#  endif
+#endif
 
     for (const std::string &msg : getAllNetMessageTypes())
         mapRecvBytesPerMsgCmd[msg] = 0;
@@ -2820,7 +2904,15 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
 {
     size_t nMessageSize = msg.data.size();
     size_t nTotalSize = nMessageSize + CMessageHeader::HEADER_SIZE;
+#ifdef COMSYS_COMPACTION
+    if (!pnode->fHaltSend) {
+#endif
     LogPrint(BCLog::NET, "sending %s (%d bytes) peer=%d\n",  SanitizeString(msg.command.c_str()), nMessageSize, pnode->GetId());
+#ifdef COMSYS_COMPACTION
+    } else {
+        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: postponing sending %s (%d bytes) peer=%d\n",  SanitizeString(msg.command.c_str()), nMessageSize, pnode->GetId());
+    }
+#endif
 
     std::vector<unsigned char> serializedHeader;
     serializedHeader.reserve(CMessageHeader::HEADER_SIZE);
@@ -2846,7 +2938,11 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
             pnode->vSendMsg.push_back(std::move(msg.data));
 
         // If write queue empty, attempt "optimistic write"
+#ifdef COMSYS_COMPACTION
+        if (optimisticSend == true && !pnode->fHaltSend)
+#else
         if (optimisticSend == true)
+#endif
             nBytesSent = SocketSendData(pnode);
     }
     if (nBytesSent)

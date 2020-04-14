@@ -6,6 +6,8 @@
 #ifndef BITCOIN_COINS_H
 #define BITCOIN_COINS_H
 
+#include <compaction/params.h>
+
 #include <primitives/transaction.h>
 #include <compressor.h>
 #include <core_memusage.h>
@@ -120,6 +122,9 @@ struct CCoinsCacheEntry
 };
 
 typedef std::unordered_map<COutPoint, CCoinsCacheEntry, SaltedOutpointHasher> CCoinsMap;
+#ifdef COMSYS_COMPACTION
+typedef std::map<COutPoint, Coin> CCoinsMapOrdered;
+#endif
 
 /** Cursor for iterating over CoinsView state */
 class CCoinsViewCursor
@@ -220,14 +225,25 @@ public:
     CCoinsViewCache(const CCoinsViewCache &) = delete;
 
     // Standard CCoinsView methods
+#ifdef COMSYS_COMPACTION
+    // Standard CCoinsView methods
+    virtual bool GetCoin(const COutPoint &outpoint, Coin &coin) const override;
+    virtual bool HaveCoin(const COutPoint &outpoint) const override;
+#else
     bool GetCoin(const COutPoint &outpoint, Coin &coin) const override;
     bool HaveCoin(const COutPoint &outpoint) const override;
+#endif
     uint256 GetBestBlock() const override;
     void SetBestBlock(const uint256 &hashBlock);
     bool BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) override;
+#ifdef COMSYS_COMPACTION
+    // Delete all cached coins before re-filling them with those coins loaded from states.
+    void EmptyCache() const;
+#else
     CCoinsViewCursor* Cursor() const override {
         throw std::logic_error("CCoinsViewCache cursor iteration not supported.");
     }
+#endif
 
     /**
      * Check if we have the given utxo already loaded in this cache.
@@ -246,20 +262,32 @@ public:
      * on! To be safe, best to not hold the returned reference through any other
      * calls to this cache.
      */
+#ifdef COMSYS_COMPACTION
+    virtual const Coin& AccessCoin(const COutPoint &output) const;
+#else
     const Coin& AccessCoin(const COutPoint &output) const;
+#endif
 
     /**
      * Add a coin. Set potential_overwrite to true if a non-pruned version may
      * already exist.
      */
+#ifdef COMSYS_COMPACTION
+    virtual void AddCoin(const COutPoint& outpoint, Coin&& coin, bool potential_overwrite);
+#else
     void AddCoin(const COutPoint& outpoint, Coin&& coin, bool potential_overwrite);
+#endif
 
     /**
      * Spend a coin. Pass moveto in order to get the deleted data.
      * If no unspent output exists for the passed outpoint, this call
      * has no effect.
      */
+#ifdef COMSYS_COMPACTION
+    virtual bool SpendCoin(const COutPoint &outpoint, Coin* moveto = nullptr);
+#else
     bool SpendCoin(const COutPoint &outpoint, Coin* moveto = nullptr);
+#endif
 
     /**
      * Push the modifications applied to this cache to its base.
@@ -278,7 +306,11 @@ public:
     unsigned int GetCacheSize() const;
 
     //! Calculate the size of the cache (in bytes)
+#ifdef COMSYS_COMPACTION
+    virtual size_t DynamicMemoryUsage() const;
+#else
     size_t DynamicMemoryUsage() const;
+#endif
 
     /**
      * Amount of bitcoins coming in to a transaction
@@ -296,6 +328,36 @@ public:
 private:
     CCoinsMap::iterator FetchCoin(const COutPoint &outpoint) const;
 };
+
+#ifdef COMSYS_COMPACTION
+
+
+class CCoinsViewCompaction : public CCoinsViewCache
+{
+public:
+    CCoinsMapOrdered cacheCoinsOrdered;
+    bool GetCoin(const COutPoint &outpoint, Coin &coin) const override;
+    bool HaveCoin(const COutPoint &outpoint) const override;
+    CCoinsMapOrdered::const_iterator FetchCoin(const COutPoint &outpoint) const;
+    void AddCoin(const COutPoint &outpoint, Coin&& coin, bool possible_overwrite) override;
+    const Coin& AccessCoin(const COutPoint &output) const override;
+    bool SpendCoin(const COutPoint &outpoint, Coin* moveto = nullptr) override;
+    size_t DynamicMemoryUsage() const override;
+    unsigned int GetSize(void) const;
+
+    /**
+     * By deleting the copy constructor, we prevent accidentally using it when one intends to create a cache on top of a base cache.
+     */
+    CCoinsViewCompaction(const CCoinsViewCompaction &) = delete;
+
+    CCoinsViewCompaction(CCoinsView *viewIn);
+    bool Flush() {
+        throw std::logic_error("CCoinsViewCompaction does not support flushing (hot state only).");
+    }
+    friend class CCoinsViewCompactionCursor;
+};
+
+#endif
 
 //! Utility function to add all of a transaction's outputs to a cache.
 // When check is false, this assumes that overwrites are only possible for coinbase transactions.

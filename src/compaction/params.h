@@ -1,0 +1,20 @@
+#ifndef COMPACTION_PARAMS_H_
+#define COMPACTION_PARAMS_H_
+
+#define COMSYS_COMPACTION
+
+#ifndef ENABLE_COMPACTION
+#  define ENABLE_COMPACTION
+#endif
+
+#ifndef ALWAYS_PROVIDE_STATE
+#  define ALWAYS_PROVIDE_STATE
+#endif
+
+#ifndef ENABLE_EVALUATION
+#  define ENABLE_EVALUATION
+#endif
+
+#define COMPACTION_STEPSIZE 10000
+
+#endif

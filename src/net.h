@@ -6,6 +6,10 @@
 #ifndef BITCOIN_NET_H
 #define BITCOIN_NET_H
 
+// Start COMSYS
+#include <compaction/params.h>
+// End COMSYS
+
 #include <addrdb.h>
 #include <addrman.h>
 #include <amount.h>
@@ -677,6 +681,11 @@ public:
     const uint64_t nKeyedNetGroup;
     std::atomic_bool fPauseRecv;
     std::atomic_bool fPauseSend;
+#ifdef COMSYS_COMPACTION
+    std::atomic_bool fHaltRecv;
+    std::atomic_bool fHaltRecvEffective;
+    std::atomic_bool fHaltSend;
+#endif
 protected:
 
     mapMsgCmdSize mapSendBytesPerMsgCmd;
@@ -736,6 +745,11 @@ public:
     CCriticalSection cs_feeFilter;
     CAmount lastSentFeeFilter;
     int64_t nextSendTimeFeeFilter;
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    uint64_t number_requested_state_chunks;
+#  endif
+#endif
 
     CNode(NodeId id, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn, SOCKET hSocketIn, const CAddress &addrIn, uint64_t nKeyedNetGroupIn, uint64_t nLocalHostNonceIn, const CAddress &addrBindIn, const std::string &addrNameIn = "", bool fInboundIn = false);
     ~CNode();

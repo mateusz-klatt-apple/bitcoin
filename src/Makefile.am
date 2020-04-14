@@ -104,6 +104,8 @@ BITCOIN_CORE_H = \
   checkqueue.h \
   clientversion.h \
   coins.h \
+  compaction/compaction.h \
+  compaction/evaluation.h \
   compat.h \
   compat/byteswap.h \
   compat/endian.h \
@@ -221,6 +223,8 @@ libbitcoin_server_a_SOURCES = \
   blockencodings.cpp \
   chain.cpp \
   checkpoints.cpp \
+  compaction/compaction.cpp \
+  compaction/evaluation.cpp \
   consensus/tx_verify.cpp \
   httprpc.cpp \
   httpserver.cpp \

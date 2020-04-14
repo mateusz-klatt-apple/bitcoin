@@ -5,6 +5,13 @@
 
 #include <net_processing.h>
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#include <shutdown.h>
+#include <compaction/compaction.h>
+#include <compaction/evaluation.h>
+#endif
+
 #include <addrman.h>
 #include <arith_uint256.h>
 #include <blockencodings.h>
@@ -361,6 +368,11 @@ static bool MarkBlockAsReceived(const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs
         state->nBlocksInFlight--;
         state->nStallingSince = 0;
         mapBlocksInFlight.erase(itInFlight);
+#ifdef COMSYS_COMPACTION
+        if (CompactionState::checkWantToCreateState() && state->nBlocksInFlight == 0) {
+            CompactionState::setNoMoreBlocksInFlight(true);
+        }
+#endif
         return true;
     }
     return false;
@@ -517,13 +529,31 @@ static void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vec
 
     if (state->pindexBestKnownBlock == nullptr || state->pindexBestKnownBlock->nChainWork < chainActive.Tip()->nChainWork || state->pindexBestKnownBlock->nChainWork < nMinimumChainWork) {
         // This peer has nothing interesting.
+#ifdef COMSYS_COMPACTION
+        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Chainwork of peer %u is insufficient.\n", __FILE__, __func__, __LINE__, nodeid);
+#endif
         return;
     }
 
     if (state->pindexLastCommonBlock == nullptr) {
         // Bootstrap quickly by guessing a parent of our best tip is the forking point.
         // Guessing wrong in either direction is not a problem.
+#ifdef COMSYS_COMPACTION
+        // If we know a state that we did not make use of yet (in bypassing old blocks), then
+        // just assume that we at least agree on the state
+        if (currentState != nullptr && chainActive.Height() <= currentState->getHeight()) {
+            BlockMap::iterator it = mapBlockIndex.find(currentState->getLatestBlockHash());
+            if (it != mapBlockIndex.end()) {
+                state->pindexLastCommonBlock = it->second;
+            }
+        }
+        // Fallback: Legacy guessing if we still don't have a valid block index
+        if (state->pindexLastCommonBlock == nullptr) {
+            state->pindexLastCommonBlock = chainActive[std::min(state->pindexBestKnownBlock->nHeight, chainActive.Height())];
+        }
+#else
         state->pindexLastCommonBlock = chainActive[std::min(state->pindexBestKnownBlock->nHeight, chainActive.Height())];
+#endif
     }
 
     // If the peer reorganized, our previous pindexLastCommonBlock may not be an ancestor
@@ -531,6 +561,12 @@ static void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vec
     state->pindexLastCommonBlock = LastCommonAncestor(state->pindexLastCommonBlock, state->pindexBestKnownBlock);
     if (state->pindexLastCommonBlock == state->pindexBestKnownBlock)
         return;
+#ifdef COMSYS_COMPACTION
+    // Don't download any blocks prior to our already known state
+    if (currentState != nullptr && state->pindexLastCommonBlock->nHeight < currentState->getHeight()) {
+        return;
+    }
+#endif
 
     std::vector<const CBlockIndex*> vToFetch;
     const CBlockIndex *pindexWalk = state->pindexLastCommonBlock;
@@ -559,6 +595,9 @@ static void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vec
         for (const CBlockIndex* pindex : vToFetch) {
             if (!pindex->IsValid(BLOCK_VALID_TREE)) {
                 // We consider the chain that this peer is on invalid.
+#ifdef COMSYS_COMPACTION
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Peer %u presented an invalid chain from our perspective.\n", __FILE__, __func__, __LINE__, nodeid);
+#endif
                 return;
             }
             if (!State(nodeid)->fHaveWitness && IsWitnessEnabled(pindex->pprev, consensusParams)) {
@@ -1055,6 +1094,13 @@ bool static AlreadyHave(const CInv& inv) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
     case MSG_BLOCK:
     case MSG_WITNESS_BLOCK:
         return LookupBlockIndex(inv.hash) != nullptr;
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    // This check is realized in ProcessGetData
+    case MSG_STATE:
+        return false;
+#  endif
+#endif
     }
     // Don't know what it is, just say we already got one
     return true;
@@ -1195,8 +1241,15 @@ void static ProcessGetBlockData(CNode* pfrom, const CChainParams& chainparams, c
             pblock = pblockRead;
         }
         if (pblock) {
+#ifdef COMSYS_COMPACTION
+            if (inv.type == MSG_BLOCK) {
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Sending out block %s to peer %d (%s)", __FILE__, __func__, __LINE__, (pblock->GetBlockHeader()).GetHash().ToString(), pfrom->GetId(), pfrom->GetAddrName());
+                connman->PushMessage(pfrom, msgMaker.Make(SERIALIZE_TRANSACTION_NO_WITNESS, NetMsgType::BLOCK, *pblock));
+            }    
+#else
             if (inv.type == MSG_BLOCK)
                 connman->PushMessage(pfrom, msgMaker.Make(SERIALIZE_TRANSACTION_NO_WITNESS, NetMsgType::BLOCK, *pblock));
+#endif
             else if (inv.type == MSG_WITNESS_BLOCK)
                 connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::BLOCK, *pblock));
             else if (inv.type == MSG_FILTERED_BLOCK)
@@ -1270,16 +1323,88 @@ void static ProcessGetData(CNode* pfrom, const CChainParams& chainparams, CConnm
     {
         LOCK(cs_main);
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Received GETDATA request of type %s; processing it now!\n", __FILE__, __func__, __LINE__, it->type);
+        unsigned int inv_ctr = 0;
+        while (it != pfrom->vRecvGetData.end() && (it->type == MSG_TX || it->type == MSG_WITNESS_TX || it->type == MSG_STATE)) {
+            if (interruptMsgProc) {
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Returning since interruptMsgProc was true\n", __FILE__, __func__, __LINE__);
+                return;
+            }
+            // Don't bother if send buffer is too full to respond anyway
+            if (pfrom->fPauseSend) {
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Buffer is full, not processing the GETDATA request\n", __FILE__, __func__, __LINE__);
+                break;
+            }
+#  else
         while (it != pfrom->vRecvGetData.end() && (it->type == MSG_TX || it->type == MSG_WITNESS_TX)) {
             if (interruptMsgProc)
                 return;
             // Don't bother if send buffer is too full to respond anyway
             if (pfrom->fPauseSend)
                 break;
+#  endif
+#else
+        while (it != pfrom->vRecvGetData.end() && (it->type == MSG_TX || it->type == MSG_WITNESS_TX)) {
+            if (interruptMsgProc)
+                return;
+            // Don't bother if send buffer is too full to respond anyway
+            if (pfrom->fPauseSend)
+                break;
+#endif
 
             const CInv &inv = *it;
             it++;
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+            inv_ctr++;
+            if (inv.type == MSG_TX || inv.type == MSG_WITNESS_TX) {
+                // Send stream from relay memory
+                bool push = false;
+                auto mi = mapRelay.find(inv.hash);
+                int nSendFlags = (inv.type == MSG_TX ? SERIALIZE_TRANSACTION_NO_WITNESS : 0);
+                if (mi != mapRelay.end()) {
+                    connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *mi->second));
+                    push = true;
+                } else if (pfrom->timeLastMempoolReq) {
+                    auto txinfo = mempool.info(inv.hash);
+                    // To protect privacy, do not answer getdata using the mempool when
+                    // that TX couldn't have been INVed in reply to a MEMPOOL request.
+                    if (txinfo.tx && txinfo.nTime <= pfrom->timeLastMempoolReq) {
+                        connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *txinfo.tx));
+                        push = true;
+                    }
+                }
+                if (!push) {
+                    vNotFound.push_back(inv);
+                }
+            } else if (inv.type == MSG_STATE) {
+                if (syncComplete && prevState->isHashValid(inv.hash)) {
+                    // serialize file
+                    std::vector<unsigned char> stateBytes;
+                    stateBytes.clear();
+
+                    // Check whether state meta file is requiested or a state chunk
+                    if (inv.hash == prevState->getFileHash()) {
+                        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: State meta information for state %s (height: %d) requested.\n", __FILE__, __func__, __LINE__, prevState->getHash().ToString(), prevState->getHeight());
+                        toByteVector(prevState->getFileName(), stateBytes);
+                    } else {
+                        unsigned int offset = (prevState->getMapHashToChunk())[inv.hash];
+                        toByteVector(prevState->getChunks()->at(offset)->fileName, stateBytes);
+                    }
+
+                    // send chunks of 1MB size
+                    CSerializedNetMsg msg;
+                    msg.command = NetMsgType::STATE;
+
+                    // send whole chunk at once (make sure to set MAX_CHUNK_SIZE appropiately)
+                    msg.data.insert(msg.data.end(), stateBytes.begin(), stateBytes.end());
+                    connman->PushMessage(pfrom, reinterpret_cast<CSerializedNetMsg&&>(msg));
+                }
+            }
+#  else
             // Send stream from relay memory
             bool push = false;
             auto mi = mapRelay.find(inv.hash);
@@ -1299,6 +1424,8 @@ void static ProcessGetData(CNode* pfrom, const CChainParams& chainparams, CConnm
             if (!push) {
                 vNotFound.push_back(inv);
             }
+#  endif
+#endif
         }
     } // release cs_main
 
@@ -1483,6 +1610,28 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETHEADERS, chainActive.GetLocator(pindexLast), uint256()));
         }
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+#    ifdef ENABLE_EVALUATION
+        if (evalp_headerchain_download && evalp_headerchain_download->isActive()) {
+            unsigned int current_block_height = pindexLast->nHeight;
+            if (current_block_height % COMPACTION_STEPSIZE == 0 && !(evalp_headerchain_download->headerAlreadySeen(current_block_height))) {
+                evalp_headerchain_download->stopMeasurement();
+                evalp_headerchain_download->doMeasurement(current_block_height);
+                evalp_headerchain_download->startMeasurement();
+            }
+
+            evalp_headerchain_download->headerReceived(current_block_height);
+            evalp_headerchain_download->incrementBlockcount();
+
+            if (evalp_headerchain_download->synchronizationFinished()) {
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Finished measuring headerchain download up to block height %d, hence shutting down.\n", __FILE__, __func__, __LINE__, evalp_headerchain_download->getBlockcount());
+                StartShutdown();
+            }
+        }
+#    endif
+#  endif
+#endif
         bool fCanDirectFetch = CanDirectFetch(chainparams.GetConsensus());
         // If this set of headers is valid and ends in a block with at least as
         // much work as our tip, download as much as possible.
@@ -1490,6 +1639,9 @@ bool static ProcessHeadersMessage(CNode *pfrom, CConnman *connman, const std::ve
             std::vector<const CBlockIndex*> vToFetch;
             const CBlockIndex *pindexWalk = pindexLast;
             // Calculate all the blocks we'd need to switch to pindexLast, up to a limit.
+#ifdef COMSYS_COMPACTION
+            // Note: No change needs to be made here as we're not confronted with big reorgs during state creation eval
+#endif
             while (pindexWalk && !chainActive.Contains(pindexWalk) && vToFetch.size() <= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
                 if (!(pindexWalk->nStatus & BLOCK_HAVE_DATA) &&
                         !mapBlocksInFlight.count(pindexWalk->GetBlockHash()) &&
@@ -1819,6 +1971,13 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             LogPrintf("New outbound peer connected: version: %d, blocks=%d, peer=%d%s\n",
                       pfrom->nVersion.load(), pfrom->nStartingHeight, pfrom->GetId(),
                       (fLogIPs ? strprintf(", peeraddr=%s", pfrom->addr.ToString()) : ""));
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+            eval_number_outbound_peers++;
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Peer %u (%s) connected, now counting %u connected peers.\n", __FILE__, __func__, __LINE__, pfrom->GetId(), pfrom->GetAddrName(), eval_number_outbound_peers);
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Services: %u.\n", __FILE__, __func__, __LINE__, pfrom->nServices);
+#  endif
+#endif
         }
 
         if (pfrom->nVersion >= SENDHEADERS_VERSION) {
@@ -1842,6 +2001,47 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::SENDCMPCT, fAnnounceUsingCMPCTBLOCK, nCMPCTBLOCKVersion));
         }
         pfrom->fSuccessfullyConnected = true;
+
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        if (!full_sync_mode && !pfrom->fInbound) {
+            nodeStatus[pfrom->GetId()] = NOT_REQUESTED;
+        }
+
+#    ifdef ENABLE_EVALUATION
+        if (eval_number_outbound_peers == MAX_OUTBOUND_CONNECTIONS) {
+            if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+                evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_SYNC_TOTAL);
+                evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_PREPARATION_TOTAL);
+                evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_PREPARATION_TOTAL); // No preparation needed for vanilla sync
+                evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+            }
+            if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+                evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_SYNC_TOTAL);
+                evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_PREPARATION_TOTAL);
+            }
+            if (evalp_headerchain_download && evalp_headerchain_download->isActive()) {
+                evalp_headerchain_download->startMeasurement();
+            }
+
+            // When evaluating, postpone state requests until all
+            // outbound connections have been fully established.
+            if (!full_sync_mode) {
+                connman->ForEachNode(requestStateFrom);
+            }
+        }
+
+#    else
+        // Without performance evaluation it's ok to ask for states
+        // as soon as we successfully established a connection to
+        // the new peer.
+        if (!full_sync_mode) {
+            requestStateFrom(pfrom);
+        }
+#    endif
+
+#  endif
+#endif
     }
 
     else if (!pfrom->fSuccessfullyConnected)
@@ -1953,6 +2153,15 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
         uint32_t nFetchFlags = GetFetchFlags(pfrom);
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        unsigned int stateOffset = 0;
+        bool newStateMessages = false;
+        uint256 stateHash;
+        std::vector<uint256> vHashes = std::vector<uint256>();
+#  endif
+#endif
+
         for (CInv &inv : vInv)
         {
             if (interruptMsgProc)
@@ -1977,6 +2186,28 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
                     LogPrint(BCLog::NET, "getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, inv.hash.ToString(), pfrom->GetId());
                 }
             }
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+            else if (inv.type == MSG_STATE) {
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Received inventory contained new STATE information!\n", __FILE__, __func__, __LINE__);
+                if (!full_sync_mode) {
+
+                    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Keeping the inventory information as I still need a state.\n", __FILE__, __func__, __LINE__);
+                    newStateMessages = true;
+
+                    if (stateOffset == 0) {
+                        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Received state advertisement %s\n", __FILE__, __func__, __LINE__, inv.hash.ToString());
+                        stateHash = inv.hash;
+                    } else {
+                        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Received state chunk advertisement %s\n", __FILE__, __func__, __LINE__, inv.hash.ToString());
+                        vHashes.push_back(inv.hash);
+                    }
+
+                    stateOffset++;
+                }
+            }
+#  endif
+#endif
             else
             {
                 pfrom->AddInventoryKnown(inv);
@@ -1987,6 +2218,90 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
                 }
             }
         }
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        if (newStateMessages) {
+            LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Processing newly received state information!\n", __FILE__, __func__, __LINE__);
+            if (Hash(vHashes.begin(), vHashes.end()) == stateHash) {
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Offered state chunks hash to value consistent to the state I'm looking for: %s!\n", __FILE__, __func__, __LINE__, stateHash.ToString());
+
+                // If no knowledge of the advertised state is present, store its information in the state_id -> [chunk_ids] mapping
+                if (mapStateChunks.find(stateHash) == mapStateChunks.end()) {
+                    mapStateChunks.insert(std::pair<uint256, std::vector<uint256>>(stateHash, vHashes));
+                    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Stored that I now know the chunks of state %s.\n", __FILE__, __func__, __LINE__, stateHash.ToString());
+                }
+
+                // Update information that the sender of the STATE message knows the advertised state/chunks
+                if (mapOfferedStates.find(stateHash) == mapOfferedStates.end()) { // Node currently unknown
+                    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: This is the first time I was offered state %s. Creating new list of nodes offering this state and adding peer %d (%s).\n", __FILE__, __func__, __LINE__, stateHash.ToString(), pfrom->GetId(), pfrom->GetAddrName());
+                    std::vector<CNode*> vNodes = std::vector<CNode*>();
+                    vNodes.push_back(pfrom);
+                    mapOfferedStates.insert(std::pair<uint256, std::vector<CNode*>>(stateHash, vNodes));
+                } else { // Node already known
+                    // add peer to offered state map if not already present
+                    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: State %s was previously offered. Adding peer %d (%s) to list of nodes offering the state...", __FILE__, __func__, __LINE__, stateHash.ToString(), pfrom->GetId(), pfrom->GetAddrName());
+                    if (!(std::find(mapOfferedStates[stateHash].begin(), mapOfferedStates[stateHash].end(), pfrom) != mapOfferedStates[stateHash].end())) {
+                        mapOfferedStates[stateHash].push_back(pfrom);
+                        LogPrint(BCLog::COMPACTION_DETAIL, "the peer was added!\n");
+                    } else {
+                        LogPrint(BCLog::COMPACTION_DETAIL, "ignored already present peer.\n");
+                    }
+                }
+
+                // Decide whether to request the current state (or wait for more advertisements)
+                {
+                    // Apparently, multiple concurrent state advertisements cause a race condition.
+                    // Hence, take the lock for this section just in case.
+                    LOCK(cs_main);
+                    if (requestedState.IsNull()) {
+                        // Find threshold when to accept best state
+
+                        // Find the most-offered state
+                        uint256 bestHash;
+                        unsigned int nOffered = 0;
+                        for (const auto &x : mapOfferedStates) {
+                            if (nOffered < x.second.size()){
+                                bestHash = x.first;
+                                nOffered = x.second.size();
+                            }
+                        }
+
+                        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Best currently known state is %s and has %d/%d state offers...\n", __FILE__, __func__, __LINE__, bestHash.ToString(), nOffered, REQUIRED_STATE_OFFERS);
+
+                        if (nOffered >= REQUIRED_STATE_OFFERS) {
+                            LogPrint(BCLog::COMPACTION, "starting to download this state!\n");
+                            requestedState = bestHash;
+                        } else {
+                            LogPrint(BCLog::COMPACTION_DETAIL, "waiting for additional state advertisements.\n");
+                        }
+
+                        // If we decided on a state based on THIS advertisement, initialize the chunk status map
+                        if (!requestedState.IsNull()) {
+                            // Verify that we insert into clean map
+                            if (mapChunkStatus.size() != 0) {
+                                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: CRITICAL: Working on dirty chunk status table; contained already %d entries!\n", __FILE__, __func__, __LINE__, mapChunkStatus.size());
+                            }
+                            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Marking all state chunks as NEEDED.\n", __FILE__, __func__, __LINE__);
+                            for (const auto &chunk : mapStateChunks[requestedState]) {
+                                mapChunkStatus.insert(std::pair<uint256, ChunkStatus>(chunk, NEEDED));
+                                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d:     %04d: <%s, NEEDED>\n", __FILE__, __func__, __LINE__, mapChunkStatus.size(), chunk.ToString());
+                            }
+
+                            unsigned int number_chunks_per_peer = mapChunkStatus.size() / REQUIRED_STATE_OFFERS ;
+                            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Requesting up to %d state chunks immediately from all peers advertising that state.\n", __FILE__, __func__, __LINE__, number_chunks_per_peer);
+                            for (auto const& node: mapOfferedStates[requestedState]) {
+                                requestStateChunksFrom(node, number_chunks_per_peer);
+                            }
+                        }
+                    }
+                }
+
+            } else {
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Have to wait for additional state chunks (or overall state hash value is inconsistent?)\n", __FILE__, __func__, __LINE__);
+            }
+        }
+#  endif
+#endif
     }
 
 
@@ -2055,6 +2370,16 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         LogPrint(BCLog::NET, "getblocks %d to %s limit %d from peer=%d\n", (pindex ? pindex->nHeight : -1), hashStop.IsNull() ? "end" : hashStop.ToString(), nLimit, pfrom->GetId());
         for (; pindex; pindex = chainActive.Next(pindex))
         {
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+#    ifdef ENABLE_EVALUATION
+            if (pindex->nHeight == eval_state_height + eval_tail_length) {
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Reached virtual end of chain (state height + blockchain tail).\n", __FILE__, __func__, __LINE__);
+                break;
+            }
+#    endif
+#  endif
+#endif
             if (pindex->GetBlockHash() == hashStop)
             {
                 LogPrint(BCLog::NET, "  getblocks stopping at %d %s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
@@ -2178,6 +2503,12 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         LogPrint(BCLog::NET, "getheaders %d to %s from peer=%d\n", (pindex ? pindex->nHeight : -1), hashStop.IsNull() ? "end" : hashStop.ToString(), pfrom->GetId());
         for (; pindex; pindex = chainActive.Next(pindex))
         {
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+            if (pindex->nHeight > eval_state_height + eval_tail_length)
+                break;
+#  endif
+#endif
             vHeaders.push_back(pindex->GetBlockHeader());
             if (--nLimit <= 0 || pindex->GetBlockHash() == hashStop)
                 break;
@@ -2386,8 +2717,15 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         }
     }
 
-
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    else if (strCommand == NetMsgType::CMPCTBLOCK && !fImporting && !fReindex && full_sync_mode) // Ignore blocks received while importing or before state is available
+#  else
     else if (strCommand == NetMsgType::CMPCTBLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
+#  endif
+#else
+    else if (strCommand == NetMsgType::CMPCTBLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
+#endif
     {
         CBlockHeaderAndShortTxIDs cmpctblock;
         vRecv >> cmpctblock;
@@ -2608,7 +2946,15 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
     }
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    else if (strCommand == NetMsgType::BLOCKTXN && !fImporting && !fReindex && full_sync_mode) // Ignore blocks received while importing or before we have a state
+#  else
     else if (strCommand == NetMsgType::BLOCKTXN && !fImporting && !fReindex) // Ignore blocks received while importing
+#  endif
+#else
+    else if (strCommand == NetMsgType::BLOCKTXN && !fImporting && !fReindex) // Ignore blocks received while importing
+#endif
     {
         BlockTransactions resp;
         vRecv >> resp;
@@ -2708,7 +3054,15 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         return ProcessHeadersMessage(pfrom, connman, headers, chainparams, should_punish);
     }
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    else if (strCommand == NetMsgType::BLOCK && !fImporting && !fReindex && full_sync_mode) // Ignore blocks received while importing or before we know a state
+#  else
     else if (strCommand == NetMsgType::BLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
+#  endif
+#else
+    else if (strCommand == NetMsgType::BLOCK && !fImporting && !fReindex) // Ignore blocks received while importing
+#endif
     {
         std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
         vRecv >> *pblock;
@@ -2815,6 +3169,32 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         size_t nAvail = vRecv.in_avail();
         bool bPingFinished = false;
         std::string sProblem;
+
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        if (pfrom->GetId() < MAX_OUTBOUND_CONNECTIONS) {
+            if (nodeStatus[pfrom->GetId()] == REQUESTED) {
+            }
+        }
+
+        // check whether we have to fall back to slow sync
+        if (!full_sync_mode) {
+            bool allTimeout = true;
+            for(int i=0;i<MAX_OUTBOUND_CONNECTIONS;i++) {
+                if(nodeStatus[i] != TIMEOUT && g_connman->ForNode(i, checkConnection)) {
+                    allTimeout = false;
+                }
+            }
+
+            // fall back to slow sync if we have MAX_OUTBOUND_CONNECTIONS and all are timeout or disconnected
+            if (allTimeout && g_connman->GetNodeCount(CConnman::CONNECTIONS_OUT) >= MAX_OUTBOUND_CONNECTIONS) {
+                switchToFullSync(nullptr, 0);
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: No Peer could provide a state, falling back to slow sync\n", __FILE__, __func__, __LINE__);
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Consider manually providing a state with -compaction -statefile=stateFile and restart synchronization\n", __FILE__, __func__, __LINE__);
+            }
+        }
+#  endif
+#endif
 
         if (nAvail >= sizeof(nonce)) {
             vRecv >> nonce;
@@ -2931,6 +3311,136 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             LogPrint(BCLog::NET, "received: feefilter of %s from peer=%d\n", CFeeRate(newFeeFilter).ToString(), pfrom->GetId());
         }
     }
+
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+
+    else if (strCommand == NetMsgType::GETSTATE) {
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Received GETSTATE request from peer %d (%s)\n", __FILE__, __func__, __LINE__, pfrom->GetId(), pfrom->GetAddrName());
+        if(syncComplete && provideState) {
+            std::vector<CInv> vInv;
+
+            vInv.push_back(CInv(MSG_STATE, prevState->getHash()));
+            vInv.push_back(CInv(MSG_STATE, prevState->getFileHash()));
+            const std::vector<std::unique_ptr<CompactionChunk>>* vChunks = prevState->getChunks();
+            for (size_t i = 0; i < vChunks->size(); i++) {
+                vInv.push_back(CInv(MSG_STATE, vChunks->at(i)->chunkHash));
+            }
+
+            connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::INV, vInv));
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Advertised state %s (%d) to peer %d (%s):\n", __FILE__, __func__, __LINE__, prevState->getHash().ToString(), prevState->getHeight(), pfrom->GetId(), pfrom->GetAddrName());
+            for (size_t i = 0; i < vChunks->size(); i++) {
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d:     %04d: %s\n", __FILE__, __func__, __LINE__, i,vChunks->at(i)->chunkHash.ToString());
+            }
+        }
+    }
+
+    else if (strCommand == NetMsgType::STATE) {
+
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Received STATE message from peer %d (%s)\n", __FILE__, __func__, __LINE__, pfrom->GetId(), pfrom->GetAddrName());
+        std::string tmpName;
+        std::string fullTmpPath;
+        unsigned int node_id = pfrom->GetId();
+        unsigned int chunk_id = 0;
+        do {
+            tmpName = "tmp_" + std::to_string(node_id) + "_" + std::to_string(chunk_id) + ".state";
+            fullTmpPath = GetDataDir().string() + "/" + tmpName;
+            chunk_id++;
+        } while (boost::filesystem::exists(fullTmpPath));
+
+        std::fstream f(fullTmpPath, std::ios_base::out | std::ios_base::binary);
+        LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Storing chunk temporarily as %s...", __FILE__, __func__, __LINE__, fullTmpPath);
+
+        f.write(vRecv.data(), vRecv.size());
+        f.close();
+        LogPrint(BCLog::COMPACTION_DETAIL, "done!\n");
+
+        uint256 tmpHash = calculateHashFromFile(fullTmpPath);
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Received state or chunk %s from peer %d (%s).\n", __FILE__, __func__, __LINE__, tmpHash.ToString(), pfrom->GetId(), pfrom->GetAddrName());
+
+        // verify that we want that file
+        if ( (std::find(mapStateChunks[requestedState].begin(), mapStateChunks[requestedState].end(), tmpHash) != mapStateChunks[requestedState].end()) && ((mapChunkStatus.find(tmpHash) == mapChunkStatus.end()) || mapChunkStatus[tmpHash] != STORED) ) {
+
+            if (tmpHash == mapStateChunks[requestedState].at(0)) { // *.state file
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Handling state meta information.\n", __FILE__, __func__, __LINE__);
+                unsigned int tmpHeight;
+                std::fstream f;
+                f.open(fullTmpPath, std::ios_base::in | std::ios_base::binary);
+                ::Unserialize(f, tmpHeight);
+                f.close();
+
+                std::stringstream s;
+                s << std::setfill('0') << std::setw(10) << tmpHeight;
+                requestedStateFilename = s.str() + ".state";
+                boost::filesystem::rename(fullTmpPath, GetStateDir() + "/" + requestedStateFilename);
+
+                mapChunkStatus[tmpHash] = STORED;
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Set status of meta information chunk of state %s to STORED.\n", __FILE__, __func__, __LINE__, tmpHash.ToString());
+            } else { // *.chunk file
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Handling single chunk\n.", __FILE__, __func__, __LINE__);
+                std::unique_ptr<CompactionChunk> tmpChunk(CompactionState::loadChunk(fullTmpPath));
+                boost::filesystem::rename(fullTmpPath, createChunkFileName(tmpChunk->height, tmpChunk->offset));
+                tmpChunk.reset();
+
+                mapChunkStatus[tmpHash] = STORED;
+                LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Set status of chunks in file %s to STORED.\n", __FILE__, __func__, __LINE__, tmpName);
+                pfrom->number_requested_state_chunks -= 1;
+
+                unsigned int number_chunks_per_peer = mapChunkStatus.size() / REQUIRED_STATE_OFFERS;
+                if (pfrom->number_requested_state_chunks == 0) {
+                    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Received last state chunk I requested from peer %d (%s); requesting new ones!\n", __FILE__, __func__, __LINE__, pfrom->GetId(), pfrom->GetAddrName());
+                    requestStateChunksFrom(pfrom, number_chunks_per_peer);
+                }
+            }
+        } else {
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: ERROR: Received irrelevant or wrong state information! Deleting temporary file!\n", __FILE__, __func__, __LINE__);
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Nevertheless trying to interpret it.\n", __FILE__, __func__, __LINE__);
+            std::unique_ptr<CompactionChunk> tmpChunk(CompactionState::loadChunk(fullTmpPath));
+            tmpChunk.reset();
+            boost::filesystem::remove(fullTmpPath);
+        }
+
+        std::vector<CInv> vCInv;
+        for (size_t i = 0; i < mapStateChunks[requestedState].size(); i++) {
+            if ((mapChunkStatus.find(mapStateChunks[requestedState].at(i)) == mapChunkStatus.end()) || (mapChunkStatus[mapStateChunks[requestedState].at(i)] == NEEDED)) {
+                vCInv.push_back(CInv(MSG_STATE, mapStateChunks[requestedState].at(i)));
+                mapChunkStatus[mapStateChunks[requestedState].at(i)] = IN_TRANSIT;
+                connman->PushMessage(pfrom, msgMaker.Make(NetMsgType::GETDATA, vCInv));
+                break;
+            }
+        }
+
+        if (mapStateChunks[requestedState].size() == mapChunkStatus.size()) {
+            bool finished = true;
+            for (auto const& x : mapChunkStatus){
+                if (x.second != STORED) {
+                    finished = false;
+                    break;
+                }
+            }
+            if (finished) {
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: %s,%s,%d: Finished state download, try loading state!\n", __FILE__, __func__, __LINE__, __FILE__, __func__, __LINE__);
+                downloaded_state = CompactionState::loadState(requestedStateFilename);
+                LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Downloaded state has been loaded.\n", __FILE__, __func__, __LINE__);
+                bool switched_to_full_sync = switchToFullSync(&downloaded_state, header_chain_best_known);
+#    ifdef ENABLE_EVALUATION
+                if (switched_to_full_sync) {
+                    if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+                        evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_SYNC_TOTAL);
+                        evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_PREPARATION_TOTAL);
+                        evalp_compaction_synchronization->doMeasurement(currentState->getHeight());
+                        evalp_compaction_synchronization->setBlockcount(currentState->getHeight());
+                        evalp_compaction_synchronization->enterTailPhase();
+                        evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+                    }
+                }
+#    endif
+            }
+        }
+    }
+
+#  endif
+#endif
 
     else if (strCommand == NetMsgType::NOTFOUND) {
         // We do not care about the NOTFOUND message, but logging an Unknown Command
@@ -3343,8 +3853,13 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
             pindexBestHeader = chainActive.Tip();
         bool fFetch = state.fPreferredDownload || (nPreferredDownload == 0 && !pto->fClient && !pto->fOneShot); // Download if this is a nice peer, or we have no nice peers and this one might do.
         if (!state.fSyncStarted && !pto->fClient && !fImporting && !fReindex) {
+#ifdef COMSYS_COMPACTION
+            // We always want to fetch from as many peers as possible
+            {
+#else
             // Only actively request headers from a single peer, unless we're close to today.
             if ((nSyncStarted == 0 && fFetch) || pindexBestHeader->GetBlockTime() > GetAdjustedTime() - 24 * 60 * 60) {
+#endif
                 state.fSyncStarted = true;
                 state.nHeadersSyncTimeout = GetTimeMicros() + HEADERS_DOWNLOAD_TIMEOUT_BASE + HEADERS_DOWNLOAD_TIMEOUT_PER_HEADER * (GetAdjustedTime() - pindexBestHeader->GetBlockTime())/(consensusParams.nPowTargetSpacing);
                 nSyncStarted++;
@@ -3709,14 +4224,26 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
         // GetTime() is used by this anti-DoS logic so we can test this using mocktime
         ConsiderEviction(pto, GetTime());
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        if (full_sync_mode) {
+#  endif
+#endif
         //
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
+#ifdef COMSYS_COMPACTION
+        if (!pto->fHaltSend && !pto->fClient && ((fFetch && !pto->m_limited_node) || !IsInitialBlockDownload()) && state.nBlocksInFlight < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+#else
         if (!pto->fClient && ((fFetch && !pto->m_limited_node) || !IsInitialBlockDownload()) && state.nBlocksInFlight < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+#endif
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
             FindNextBlocksToDownload(pto->GetId(), MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight, vToDownload, staller, consensusParams);
+#ifdef COMSYS_COMPACTION
+            LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Found %u blocks to download from peer %u.\n", __FILE__, __func__, __LINE__, vToDownload.size(), pto->GetId());
+#endif
             for (const CBlockIndex *pindex : vToDownload) {
                 uint32_t nFetchFlags = GetFetchFlags(pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));
@@ -3755,6 +4282,11 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
         }
         if (!vGetData.empty())
             connman->PushMessage(pto, msgMaker.Make(NetMsgType::GETDATA, vGetData));
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        }
+#  endif
+#endif
 
         //
         // Message: feefilter

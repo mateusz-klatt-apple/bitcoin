@@ -14,6 +14,8 @@
 #include <config/bitcoin-config.h>
 #endif
 
+#include <compaction/params.h>
+
 #include <compat.h>
 #include <fs.h>
 #include <logging.h>
@@ -185,6 +187,14 @@ public:
      * @return command-line arguments
      */
     std::vector<std::string> GetArgs(const std::string& strArg) const;
+
+#ifdef COMSYS_COMPACTION
+    /**
+     * return all overridden configuration parameters for bookkeeping
+     * purposes.
+     */
+    void DebugArgs(void) const;
+#endif
 
     /**
      * Return true if the given argument has been manually set

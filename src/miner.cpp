@@ -5,6 +5,11 @@
 
 #include <miner.h>
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#include <compaction/compaction.h>
+#endif
+
 #include <amount.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -159,6 +164,13 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     coinbaseTx.vout[0].scriptPubKey = scriptPubKeyIn;
     coinbaseTx.vout[0].nValue = nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus());
     coinbaseTx.vin[0].scriptSig = CScript() << nHeight << OP_0;
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    if(provideState) {
+        addConfirmationToCoinbaseScript((CScript&)coinbaseTx.vin[0].scriptSig);
+    }
+#  endif
+#endif
     pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
     pblocktemplate->vchCoinbaseCommitment = GenerateCoinbaseCommitment(*pblock, pindexPrev, chainparams.GetConsensus());
     pblocktemplate->vTxFees[0] = -nFees;

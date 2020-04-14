@@ -10,6 +10,8 @@
 #ifndef BITCOIN_PROTOCOL_H
 #define BITCOIN_PROTOCOL_H
 
+#include <compaction/params.h>
+
 #include <netaddress.h>
 #include <serialize.h>
 #include <uint256.h>
@@ -238,6 +240,17 @@ extern const char *GETBLOCKTXN;
  * @since protocol version 70014 as described by BIP 152
  */
 extern const char *BLOCKTXN;
+
+#ifdef COMSYS_COMPACTION
+/**
+ * Sent to request a current state; ignored by non-compacting nodes.
+ */
+extern const char *GETSTATE;
+/**
+ * Sent in response to a "getstate" message; state is sent in chunks.
+ */
+extern const char *STATE;
+#endif
 };
 
 /* Get a vector of all valid message types (see above) */
@@ -276,6 +289,9 @@ enum ServiceFlags : uint64_t {
     // collisions and other cases where nodes may be advertising a service they
     // do not actually support. Other service bits should be allocated via the
     // BIP process.
+#ifdef COMSYS_COMPACTION
+    NODE_COMSYS_COMPACTION = (1 << 24),
+#endif
 };
 
 /**
@@ -379,6 +395,9 @@ enum GetDataMsg
     MSG_WITNESS_BLOCK = MSG_BLOCK | MSG_WITNESS_FLAG, //!< Defined in BIP144
     MSG_WITNESS_TX = MSG_TX | MSG_WITNESS_FLAG,       //!< Defined in BIP144
     MSG_FILTERED_WITNESS_BLOCK = MSG_FILTERED_BLOCK | MSG_WITNESS_FLAG,
+#ifdef COMSYS_COMPACTION
+    MSG_STATE = 8,
+#endif
 };
 
 /** inv message data */

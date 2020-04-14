@@ -54,7 +54,11 @@ const CBlockIndex *CChain::FindFork(const CBlockIndex *pindex) const {
     }
     if (pindex->nHeight > Height())
         pindex = pindex->GetAncestor(Height());
+#ifdef COMSYS_COMPACTION
+    while (pindex && !Contains(pindex) && !(pindex->nStatus & BLOCK_STATE_HEIGHT))
+#else
     while (pindex && !Contains(pindex))
+#endif
         pindex = pindex->pprev;
     return pindex;
 }
@@ -89,6 +93,11 @@ const CBlockIndex* CBlockIndex::GetAncestor(int height) const
     const CBlockIndex* pindexWalk = this;
     int heightWalk = nHeight;
     while (heightWalk > height) {
+#ifdef COMSYS_COMPACTION
+        if (pindexWalk->nStatus & BLOCK_STATE_HEIGHT) {
+            break;
+        }
+#endif
         int heightSkip = GetSkipHeight(heightWalk);
         int heightSkipPrev = GetSkipHeight(heightWalk - 1);
         if (pindexWalk->pskip != nullptr &&

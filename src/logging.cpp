@@ -3,6 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <compaction/params.h>
+
 #include <logging.h>
 #include <utiltime.h>
 
@@ -119,6 +121,10 @@ const CLogCategoryDesc LogCategories[] =
     {BCLog::COINDB, "coindb"},
     {BCLog::QT, "qt"},
     {BCLog::LEVELDB, "leveldb"},
+#ifdef COMSYS_COMPACTION
+    {BCLog::COMPACTION, "compaction"}, // Logging category for compaction
+    {BCLog::COMPACTION_DETAIL, "compactiondetail"}, // Use to hide the most spammy debug outputs
+#endif
     {BCLog::ALL, "1"},
     {BCLog::ALL, "all"},
 };

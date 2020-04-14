@@ -5,6 +5,11 @@
 
 #include <util.h>
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#  include <logging.h>
+#endif
+
 #include <chainparamsbase.h>
 #include <random.h>
 #include <serialize.h>
@@ -500,6 +505,28 @@ std::vector<std::string> ArgsManager::GetArgs(const std::string& strArg) const
 
     return result;
 }
+
+#ifdef COMSYS_COMPACTION
+void ArgsManager::DebugArgs(void) const {
+    std::stringstream result;
+
+    LogPrint(BCLog::COMPACTION, "========================================\n");
+    LogPrint(BCLog::COMPACTION, "Starting parameters:\n");
+
+
+    for (auto const& entry : this->m_override_args) {
+        result.str("");
+        result.clear();
+        result << "    " << entry.first;
+        for (auto const& value : entry.second) {
+            result << " " << value;
+        }
+        LogPrint(BCLog::COMPACTION, "%s\n", result.str());
+    }
+
+    LogPrint(BCLog::COMPACTION, "========================================\n");
+}
+#endif
 
 bool ArgsManager::IsArgSet(const std::string& strArg) const
 {

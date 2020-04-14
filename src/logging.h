@@ -53,6 +53,10 @@ namespace BCLog {
         COINDB      = (1 << 18),
         QT          = (1 << 19),
         LEVELDB     = (1 << 20),
+#ifdef COMSYS_COMPACTION
+        COMPACTION  = (1 << 21),
+        COMPACTION_DETAIL = (1 << 22),
+#endif
         ALL         = ~(uint32_t)0,
     };
 

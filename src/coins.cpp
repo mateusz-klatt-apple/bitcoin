@@ -3,6 +3,12 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <coins.h>
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#include <logging.h>
+#include <streams.h>
+#include <clientversion.h>
+#endif
 
 #include <consensus/consensus.h>
 #include <random.h>
@@ -36,6 +42,14 @@ CCoinsViewCache::CCoinsViewCache(CCoinsView *baseIn) : CCoinsViewBacked(baseIn),
 size_t CCoinsViewCache::DynamicMemoryUsage() const {
     return memusage::DynamicUsage(cacheCoins) + cachedCoinsUsage;
 }
+
+#ifdef COMSYS_COMPACTION
+// Delete all cached coins independent of their status
+void CCoinsViewCache::EmptyCache() const {
+    cacheCoins.clear();
+    cachedCoinsUsage = 0;
+}
+#endif
 
 CCoinsMap::iterator CCoinsViewCache::FetchCoin(const COutPoint &outpoint) const {
     CCoinsMap::iterator it = cacheCoins.find(outpoint);
@@ -243,6 +257,107 @@ bool CCoinsViewCache::HaveInputs(const CTransaction& tx) const
     }
     return true;
 }
+
+
+
+
+
+#ifdef COMSYS_COMPACTION
+
+
+
+CCoinsViewCompaction::CCoinsViewCompaction(CCoinsView *baseIn) : CCoinsViewCache(baseIn) {
+    // We need to create a full copy of the current UTXO set to operate 
+    CCoinsViewCursor* iterator = base->Cursor();
+    COutPoint key;
+    Coin value;
+
+    while(iterator->Valid()) {
+        iterator->GetKey(key);
+        iterator->GetValue(value);
+        this->cacheCoinsOrdered.emplace(std::piecewise_construct, std::forward_as_tuple(key), std::forward_as_tuple(std::move(value))).first;
+        iterator->Next();
+    }
+    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Done copying cacheCoins (%d elements).\n", __FILE__, __func__, __LINE__, this->cacheCoinsOrdered.size());
+
+    delete iterator;
+}
+
+bool CCoinsViewCompaction::GetCoin(const COutPoint &outpoint, Coin &coin) const {
+    CCoinsMapOrdered::const_iterator it = FetchCoin(outpoint);
+    if (it != this->cacheCoinsOrdered.end()) {
+        coin = it->second;
+        return !coin.IsSpent();
+    }
+    return false;
+}
+
+
+bool CCoinsViewCompaction::HaveCoin(const COutPoint &outpoint) const
+{
+    CCoinsMapOrdered::const_iterator it = cacheCoinsOrdered.find(outpoint);
+    return it == this->cacheCoinsOrdered.end();
+}
+
+
+CCoinsMapOrdered::const_iterator CCoinsViewCompaction::FetchCoin(const COutPoint &outpoint) const {
+    CCoinsMapOrdered::const_iterator it = this->cacheCoinsOrdered.find(outpoint);
+    return it;
+}
+
+void CCoinsViewCompaction::AddCoin(const COutPoint &outpoint, Coin&& coin, bool possible_overwrite) {
+    // Ignore possible overwrite
+    assert(!coin.IsSpent());
+    if (coin.out.scriptPubKey.IsUnspendable()) return;
+    CCoinsMapOrdered::iterator it;
+    bool inserted;
+    std::tie(it, inserted) = this->cacheCoinsOrdered.emplace(std::piecewise_construct, std::forward_as_tuple(outpoint), std::tuple<>());
+    if (!inserted) {
+        cachedCoinsUsage -= it->second.DynamicMemoryUsage();
+    }
+    it->second = std::move(coin);
+    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Added coins %s (%d elements).\n", __FILE__, __func__, __LINE__, outpoint.ToString(), this->cacheCoinsOrdered.size());
+    cachedCoinsUsage += it->second.DynamicMemoryUsage();
+}
+
+
+const Coin& CCoinsViewCompaction::AccessCoin(const COutPoint &outpoint) const {
+    CCoinsMapOrdered::const_iterator it = FetchCoin(outpoint);
+    if (it == this->cacheCoinsOrdered.end()) {
+        return coinEmpty;
+    } else {
+        return it->second;
+    }
+}
+
+
+bool CCoinsViewCompaction::SpendCoin(const COutPoint &outpoint, Coin* moveout) {
+    CCoinsMapOrdered::const_iterator it = FetchCoin(outpoint);
+    if (it == this->cacheCoinsOrdered.end()) return false;
+    cachedCoinsUsage -= it->second.DynamicMemoryUsage();
+    if (moveout) {
+        *moveout = std::move(it->second);
+    }
+    cacheCoinsOrdered.erase(it);
+    LogPrint(BCLog::COMPACTION_DETAIL, "log-compaction: %s,%s,%d: Spent coin %s (%d elements).\n", __FILE__, __func__, __LINE__, outpoint.ToString(), this->cacheCoinsOrdered.size());
+    return true;
+}
+
+size_t CCoinsViewCompaction::DynamicMemoryUsage() const {
+    return memusage::DynamicUsage(this->cacheCoinsOrdered) + this->cachedCoinsUsage;
+}
+
+unsigned int CCoinsViewCompaction::GetSize(void) const {
+    return (this->cacheCoinsOrdered).size();
+}
+
+
+
+#endif
+
+
+
+
 
 static const size_t MIN_TRANSACTION_OUTPUT_WEIGHT = WITNESS_SCALE_FACTOR * ::GetSerializeSize(CTxOut(), SER_NETWORK, PROTOCOL_VERSION);
 static const size_t MAX_OUTPUTS_PER_BLOCK = MAX_BLOCK_WEIGHT / MIN_TRANSACTION_OUTPUT_WEIGHT;

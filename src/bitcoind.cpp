@@ -7,6 +7,11 @@
 #include <config/bitcoin-config.h>
 #endif
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#include <compaction/evaluation.h>
+#endif
+
 #include <chainparams.h>
 #include <clientversion.h>
 #include <compat.h>
@@ -162,6 +167,17 @@ static bool AppInit(int argc, char* argv[])
             // If locking the data directory failed, exit immediately
             return false;
         }
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+        fRet = initEvaluation();
+        if (!fRet) {
+            Interrupt();
+            WaitForShutdown();
+            Shutdown();
+            return fRet;
+        }
+#  endif
+#endif
         fRet = AppInitMain();
     }
     catch (const std::exception& e) {

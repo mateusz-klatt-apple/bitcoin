@@ -14,6 +14,11 @@
 
 #include <chainparamsseeds.h>
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#  include <compaction/evaluation.h>
+#endif
+
 static CBlock CreateGenesisBlock(const char* pszTimestamp, const CScript& genesisOutputScript, uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion, const CAmount& genesisReward)
 {
     CMutableTransaction txNew;
@@ -102,7 +107,11 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_SEGWIT].nTimeout = 1510704000; // November 15th, 2017.
 
         // The best chain should have at least this much work.
+#ifdef ENABLE_EVALUATION
+        consensus.nMinimumChainWork = uint256S("0x00");
+#else
         consensus.nMinimumChainWork = uint256S("0x0000000000000000000000000000000000000000028822fef1c230963535a90d");
+#endif
 
         // By default assume that the signatures in ancestors of this block are valid.
         consensus.defaultAssumeValid = uint256S("0x0000000000000000002e63058c023a9a1de233554f28c7b21380b6c9003f36a8"); //534292

@@ -9,6 +9,12 @@
 
 #include <init.h>
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#include <compaction/compaction.h>
+#include <compaction/evaluation.h>
+#endif
+
 #include <addrman.h>
 #include <amount.h>
 #include <chain.h>
@@ -358,6 +364,22 @@ void SetupServerArgs()
     gArgs.AddArg("-version", "Print version and exit", false, OptionsCategory::OPTIONS);
     gArgs.AddArg("-alertnotify=<cmd>", "Execute command when a relevant alert is received or we see a really long fork (%s in cmd is replaced by message)", false, OptionsCategory::OPTIONS);
     gArgs.AddArg("-assumevalid=<hex>", strprintf("If this block is in the chain assume that it and its ancestors are valid and potentially skip their script verification (0 to verify all, default: %s, testnet: %s)", defaultChainParams->GetConsensus().defaultAssumeValid.GetHex(), testnetChainParams->GetConsensus().defaultAssumeValid.GetHex()), false, OptionsCategory::OPTIONS);
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    gArgs.AddArg("-compaction", "Enable compaction.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-statefile=<statefile>", "Provide a local state file instead of obtaining it from the Bitcoin network.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-provideState", "After successful synchronization, provide state to other entities.", false, OptionsCategory::OPTIONS);
+#    ifdef ENABLE_EVALUATION
+    gArgs.AddArg("-shutdownAt=<blockheight>", "Stop synchronization after reaching a certain block height and shut down.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-evaldir=<dir>", "Store all result csv files from evaluation to specified folder.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-evalMethod=<str>", "Run a specific evaluation measurement; see below for details.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-run=<run>", "Track the run ID for evaluation, used when writing out results.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-startStateHeight=<blockheight>", "Ignore state-measurement points prior to <blockheight>.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-stateHeight=<blockheight>", "Simulate a run where the state corresponds to <blockheight>.", false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-tailLength=<taillength>", "Number of full blocks required to synchronize after applying a state.", false, OptionsCategory::OPTIONS);
+#    endif
+#  endif
+#endif
     gArgs.AddArg("-blocksdir=<dir>", "Specify blocks directory (default: <datadir>/blocks)", false, OptionsCategory::OPTIONS);
     gArgs.AddArg("-blocknotify=<cmd>", "Execute command when the best block changes (%s in cmd is replaced by block hash)", false, OptionsCategory::OPTIONS);
     gArgs.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), false, OptionsCategory::OPTIONS);
@@ -1276,6 +1298,11 @@ bool AppInitMain()
      * available in the GUI RPC console even if external calls are disabled.
      */
     RegisterAllCoreRPCCommands(tableRPC);
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    registerCompactionRPCCommands(tableRPC);
+#  endif
+#endif
     g_wallet_init_interface.RegisterRPC(tableRPC);
 #if ENABLE_ZMQ
     RegisterZMQRPCCommands(tableRPC);
@@ -1424,6 +1451,11 @@ bool AppInitMain()
     nTotalCache -= nTxIndexCache;
     int64_t nCoinDBCache = std::min(nTotalCache / 2, (nTotalCache / 4) + (1 << 23)); // use 25%-50% of the remainder for disk cache
     nCoinDBCache = std::min(nCoinDBCache, nMaxCoinsDBCache << 20); // cap total coins db cache
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    compaction_coindbcache = nCoinDBCache;
+#  endif
+#endif
     nTotalCache -= nCoinDBCache;
     nCoinCacheUsage = nTotalCache; // the rest goes to in-memory cache
     int64_t nMempoolSizeMax = gArgs.GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000;
@@ -1591,6 +1623,20 @@ bool AppInitMain()
         }
     }
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    initializeCompaction();
+    nLocalServices = ServiceFlags(nLocalServices | NODE_COMSYS_COMPACTION);
+
+#    ifdef ENABLE_EVALUATION
+    if (evalp_saving_potential && evalp_saving_potential->isActive()) {
+        currentState = std::unique_ptr<CompactionState>(new CompactionState());
+    }
+#    endif
+
+#  endif
+#endif
+
     // As LoadBlockIndex can take several minutes, it's possible the user
     // requested to kill the GUI during the last operation. If so, exit.
     // As the program has not fully started yet, Shutdown() is possibly overkill.
@@ -1680,6 +1726,13 @@ bool AppInitMain()
 
     int chain_active_height;
 
+#ifdef COMSYS_COMPACTION
+    // Remove debug print but be sure to initialize chain_active_height
+    {
+        LOCK(cs_main);
+        chain_active_height = chainActive.Height();
+    }
+#else
     //// debug print
     {
         LOCK(cs_main);
@@ -1687,6 +1740,7 @@ bool AppInitMain()
         chain_active_height = chainActive.Height();
     }
     LogPrintf("nBestHeight = %d\n", chain_active_height);
+#endif
 
     if (gArgs.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION))
         StartTorControl();

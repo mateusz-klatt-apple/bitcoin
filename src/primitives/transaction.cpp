@@ -5,13 +5,19 @@
 
 #include <primitives/transaction.h>
 
+#include <compaction/params.h>
+
 #include <hash.h>
 #include <tinyformat.h>
 #include <utilstrencodings.h>
 
 std::string COutPoint::ToString() const
 {
+#ifdef COMSYS_COMPACTION
+    return strprintf("COutPoint(%s, %u)", hash.ToString(), n);
+#else
     return strprintf("COutPoint(%s, %u)", hash.ToString().substr(0,10), n);
+#endif
 }
 
 CTxIn::CTxIn(COutPoint prevoutIn, CScript scriptSigIn, uint32_t nSequenceIn)

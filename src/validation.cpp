@@ -5,6 +5,12 @@
 
 #include <validation.h>
 
+#include <compaction/params.h>
+#ifdef COMSYS_COMPACTION
+#include <compaction/compaction.h>
+#include <compaction/evaluation.h>
+#endif
+
 #include <arith_uint256.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -54,6 +60,9 @@
 #define MICRO 0.000001
 #define MILLI 0.001
 
+#ifdef COMSYS_COMPACTION
+// Need to move this to header file
+#else
 /**
  * Global state
  */
@@ -79,16 +88,25 @@ namespace {
         }
     };
 } // anon namespace
+#endif
 
+#ifdef COMSYS_COMPACTION
+// We need this enum in the header already.
+#else
 enum DisconnectResult
 {
     DISCONNECT_OK,      // All good.
     DISCONNECT_UNCLEAN, // Rolled back, but UTXO set was inconsistent with block.
     DISCONNECT_FAILED   // Something else went wrong.
 };
+#endif
 
 class ConnectTrace;
 
+#ifdef COMSYS_COMPACTION
+// We need to move class definition to the header
+CChainState g_chainstate;
+#else
 /**
  * CChainState stores and provides an API to update our local knowledge of the
  * current best chain and header tree.
@@ -209,6 +227,7 @@ private:
 
     bool RollforwardBlock(const CBlockIndex* pindex, CCoinsViewCache& inputs, const CChainParams& params) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 } g_chainstate;
+#endif
 
 
 
@@ -1183,6 +1202,13 @@ bool IsInitialBlockDownload()
     LOCK(cs_main);
     if (latchToFalse.load(std::memory_order_relaxed))
         return false;
+#ifdef COMSYS_COMPACTION
+#  ifdef ALWAYS_PROVIDE_STATE
+    if (provideState) {
+        return false;
+    }
+#  endif
+#endif
     if (fImporting || fReindex)
         return true;
     if (chainActive.Tip() == nullptr)
@@ -1219,10 +1245,26 @@ static void AlertNotify(const std::string& strMessage)
 static void CheckForkWarningConditions()
 {
     AssertLockHeld(cs_main);
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    // Before we get past initial download, we cannot reliably alert about forks
+    // (we assume we don't get stuck on a fork before finishing our initial sync)
+    // Also, assume no forks when we explicitly want to override with a compaction
+    // state.
+    if (IsInitialBlockDownload() || IsStateCurrentlyLoading())
+        return;
+#  else
     // Before we get past initial download, we cannot reliably alert about forks
     // (we assume we don't get stuck on a fork before finishing our initial sync)
     if (IsInitialBlockDownload())
         return;
+#  endif
+#else
+    // Before we get past initial download, we cannot reliably alert about forks
+    // (we assume we don't get stuck on a fork before finishing our initial sync)
+    if (IsInitialBlockDownload())
+        return;
+#endif
 
     // If our best fork is no longer within 72 blocks (+/- 12 hours if no one mines it)
     // of our head, drop it
@@ -1835,7 +1877,14 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
 
     // verify that the view's current state corresponds to the previous block
     uint256 hashPrevBlock = pindex->pprev == nullptr ? uint256() : pindex->pprev->GetBlockHash();
+#ifdef COMSYS_COMPACTION
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Current block\nblockHash     = %s (%d)\n", __FILE__, __func__, __LINE__, pindex->phashBlock->ToString(), pindex->nHeight);
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Comparing\nhashPrevBlock = %s (%d)\n.GetBestBlock = %s\n", __FILE__, __func__, __LINE__, hashPrevBlock.ToString(), (pindex->pprev == nullptr) ? -1 : pindex->pprev->nHeight, view.GetBestBlock().ToString());
+    // We cannot guarantee vanilla bitcoind's assertion to hold since our view is derived from a state and may well be
+    // disconnected from the remaining blockchain synchronization
+#else
     assert(hashPrevBlock == view.GetBestBlock());
+#endif
 
     // Special case for the genesis block, skipping connection of its transactions
     // (its coinbase is unspendable)
@@ -2278,14 +2327,23 @@ void static UpdateTip(const CBlockIndex *pindexNew, const CChainParams& chainPar
             DoWarning(strWarning);
         }
     }
-    LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utxo)", __func__, /* Continued */
+#ifdef COMSYS_COMPACTION
+    // Add newline at the end of "block received" status update in logfile
+    LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utxo)\n", __func__,
+#else
+    LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu date='%s' progress=%f cache=%.1fMiB(%utxo)", __func__,
+#endif
       pindexNew->GetBlockHash().ToString(), pindexNew->nHeight, pindexNew->nVersion,
       log(pindexNew->nChainWork.getdouble())/log(2.0), (unsigned long)pindexNew->nChainTx,
       FormatISO8601DateTime(pindexNew->GetBlockTime()),
       GuessVerificationProgress(chainParams.TxData(), pindexNew), pcoinsTip->DynamicMemoryUsage() * (1.0 / (1<<20)), pcoinsTip->GetCacheSize());
     if (!warningMessages.empty())
         LogPrintf(" warning='%s'", warningMessages); /* Continued */
+#ifdef COMSYS_COMPACTION
+    // Newline was moved to earlier point
+#else
     LogPrintf("\n");
+#endif
 
 }
 
@@ -2440,7 +2498,21 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
     // Apply the block atomically to the chain state.
     int64_t nTime2 = GetTimeMicros(); nTimeReadFromDisk += nTime2 - nTime1;
     int64_t nTime3;
+#ifdef COMSYS_COMPACTION
+    int64_t nTime4;
+    int64_t nTime5;
+#endif
     LogPrint(BCLog::BENCH, "  - Load block from disk: %.2fms [%.2fs]\n", (nTime2 - nTime1) * MILLI, nTimeReadFromDisk * MICRO);
+#ifdef COMSYS_COMPACTION
+    // Avoid chainstate update when receiving only block headers
+#  ifdef ENABLE_EVALUATION
+        if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+            evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_CONNECT_BLOCK);
+        } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+            evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_CONNECT_BLOCK);
+        }
+#  endif
+#endif
     {
         CCoinsViewCache view(pcoinsTip.get());
         bool rv = ConnectBlock(blockConnecting, state, pindexNew, view, chainparams);
@@ -2455,23 +2527,48 @@ bool CChainState::ConnectTip(CValidationState& state, const CChainParams& chainp
         bool flushed = view.Flush();
         assert(flushed);
     }
+#ifdef COMSYS_COMPACTION
+    nTime4 = GetTimeMicros(); nTimeFlush += nTime4 - nTime3;
+#else
     int64_t nTime4 = GetTimeMicros(); nTimeFlush += nTime4 - nTime3;
+#endif
     LogPrint(BCLog::BENCH, "  - Flush: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime4 - nTime3) * MILLI, nTimeFlush * MICRO, nTimeFlush * MILLI / nBlocksTotal);
     // Write the chain state to disk, if necessary.
     if (!FlushStateToDisk(chainparams, state, FlushStateMode::IF_NEEDED))
         return false;
+#ifdef COMSYS_COMPACTION
+    nTime5 = GetTimeMicros(); nTimeChainState += nTime5 - nTime4;
+#else
     int64_t nTime5 = GetTimeMicros(); nTimeChainState += nTime5 - nTime4;
+#endif
     LogPrint(BCLog::BENCH, "  - Writing chainstate: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime5 - nTime4) * MILLI, nTimeChainState * MICRO, nTimeChainState * MILLI / nBlocksTotal);
     // Remove conflicting transactions from the mempool.;
     mempool.removeForBlock(blockConnecting.vtx, pindexNew->nHeight);
     disconnectpool.removeForBlock(blockConnecting.vtx);
+#ifdef COMSYS_COMPACTION
+    int64_t nTime6 = GetTimeMicros(); nTimePostConnect += nTime6 - nTime5; nTimeTotal += nTime6 - nTime1;
+    LogPrint(BCLog::BENCH, "  - Connect postprocess: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime5) * MILLI, nTimePostConnect * MICRO, nTimePostConnect * MILLI / nBlocksTotal);
+    LogPrint(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime1) * MILLI, nTimeTotal * MICRO, nTimeTotal * MILLI / nBlocksTotal);
+#  ifdef ENABLE_EVALUATION
+    if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+        evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_CONNECT_BLOCK);
+    } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+        evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_CONNECT_BLOCK);
+    }
+#  endif
+#endif
     // Update chainActive & related variables.
     chainActive.SetTip(pindexNew);
     UpdateTip(pindexNew, chainparams);
 
+#ifdef COMSYS_COMPACTION
+    // This was moved a bit to the top to be captured by the evaluation timers
+#else
     int64_t nTime6 = GetTimeMicros(); nTimePostConnect += nTime6 - nTime5; nTimeTotal += nTime6 - nTime1;
     LogPrint(BCLog::BENCH, "  - Connect postprocess: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime5) * MILLI, nTimePostConnect * MICRO, nTimePostConnect * MILLI / nBlocksTotal);
     LogPrint(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n", (nTime6 - nTime1) * MILLI, nTimeTotal * MICRO, nTimeTotal * MILLI / nBlocksTotal);
+#endif
+
 
     connectTrace.BlockConnected(pindexNew, std::move(pthisBlock));
     return true;
@@ -2492,20 +2589,41 @@ CBlockIndex* CChainState::FindMostWorkChain() {
                 return nullptr;
             pindexNew = *it;
         }
+#ifdef COMSYS_COMPACTION
+        // Artificially say that the state has most PoW in it
+        if (currentState != nullptr && pindexNew->nHeight < currentState->getHeight()) {
+            BlockMap::iterator it = mapBlockIndex.find(currentState->getLatestBlockHash());
+            assert(it != mapBlockIndex.end());
+            return it->second;
+        }
+#endif
 
         // Check whether all blocks on the path between the currently active chain and the candidate are valid.
         // Just going until the active chain is an optimization, as we know all blocks in it are valid already.
         CBlockIndex *pindexTest = pindexNew;
         bool fInvalidAncestor = false;
         while (pindexTest && !chainActive.Contains(pindexTest)) {
+#ifdef COMSYS_COMPACTION
+            assert((currentState != nullptr && pindexTest->nHeight <= currentState->getHeight()) || pindexTest->nChainTx || pindexTest->nHeight == 0);
+#else
             assert(pindexTest->nChainTx || pindexTest->nHeight == 0);
+#endif
 
             // Pruned nodes may have entries in setBlockIndexCandidates for
             // which block files have been deleted.  Remove those as candidates
             // for the most work chain if we come across them; we can't switch
             // to a chain unless we have all the non-active-chain parent blocks.
             bool fFailedChain = pindexTest->nStatus & BLOCK_FAILED_MASK;
+#ifdef COMSYS_COMPACTION
+            bool fMissingData;
+            if (currentState != nullptr && pindexTest->nHeight <= currentState->getHeight()) {
+                fMissingData = false;
+            } else {
+                fMissingData = !(pindexTest->nStatus & BLOCK_HAVE_DATA);
+            }
+#else
             bool fMissingData = !(pindexTest->nStatus & BLOCK_HAVE_DATA);
+#endif
             if (fFailedChain || fMissingData) {
                 // Candidate chain is not usable (either invalid or missing data)
                 if (fFailedChain && (pindexBestInvalid == nullptr || pindexNew->nChainWork > pindexBestInvalid->nChainWork))
@@ -2543,8 +2661,16 @@ void CChainState::PruneBlockIndexCandidates() {
     while (it != setBlockIndexCandidates.end() && setBlockIndexCandidates.value_comp()(*it, chainActive.Tip())) {
         setBlockIndexCandidates.erase(it++);
     }
+#ifdef COMSYS_COMPACTION
+    // Need to resort to code duplication.
+#  ifndef ENABLE_EVALUATION
     // Either the current tip or a successor of it we're working towards is left in setBlockIndexCandidates.
     assert(!setBlockIndexCandidates.empty());
+#  endif
+#else
+    // Either the current tip or a successor of it we're working towards is left in setBlockIndexCandidates.
+    assert(!setBlockIndexCandidates.empty());
+#endif
 }
 
 /**
@@ -2556,7 +2682,23 @@ bool CChainState::ActivateBestChainStep(CValidationState& state, const CChainPar
     AssertLockHeld(cs_main);
 
     const CBlockIndex *pindexOldTip = chainActive.Tip();
+#ifdef COMSYS_COMPACTION
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Trying to get old tip.\n", __FILE__, __func__, __LINE__);
+    if (pindexOldTip) {
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Found at height %d with pos %s.\n", __FILE__, __func__, __LINE__, pindexOldTip->nHeight, pindexOldTip->GetBlockPos().ToString());
+    } else {
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Old tip was NULL.\n", __FILE__, __func__, __LINE__);
+    }
+#endif
     const CBlockIndex *pindexFork = chainActive.FindFork(pindexMostWork);
+#ifdef COMSYS_COMPACTION
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Trying to find fork based on pindexMostWork = %d %s.\n", __FILE__, __func__, __LINE__, pindexMostWork->nHeight, pindexMostWork->GetBlockPos().ToString());
+    if (pindexFork) {
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Found one at height %d with pos %s.\n", __FILE__, __func__, __LINE__, pindexFork->nHeight, pindexFork->GetBlockPos().ToString());
+    } else {
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Fork was NULL.\n", __FILE__, __func__, __LINE__);
+    }
+#endif
 
     // Disconnect active blocks which are no longer in the best chain.
     bool fBlocksDisconnected = false;
@@ -2570,26 +2712,53 @@ bool CChainState::ActivateBestChainStep(CValidationState& state, const CChainPar
         }
         fBlocksDisconnected = true;
     }
+#ifdef COMSYS_COMPACTION
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Had to disconnect blocks: %d\n", __FILE__, __func__, __LINE__, fBlocksDisconnected);
+#endif
 
     // Build list of new blocks to connect.
     std::vector<CBlockIndex*> vpindexToConnect;
     bool fContinue = true;
     int nHeight = pindexFork ? pindexFork->nHeight : -1;
+#ifdef COMSYS_COMPACTION
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Got nHeight for connecting blocks: %d.\n", __FILE__, __func__, __LINE__, nHeight);
+#endif
     while (fContinue && nHeight != pindexMostWork->nHeight) {
         // Don't iterate the entire list of potential improvements toward the best tip, as we likely only need
         // a few blocks along the way.
+#ifdef COMSYS_COMPACTION
+        if (currentState != nullptr && nHeight < currentState->getHeight()) {
+            nHeight = currentState->getHeight();
+        }
+#endif
         int nTargetHeight = std::min(nHeight + 32, pindexMostWork->nHeight);
+#ifdef COMSYS_COMPACTION
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: nTargetHeight: %d.\n", __FILE__, __func__, __LINE__, nTargetHeight);
+#endif
         vpindexToConnect.clear();
         vpindexToConnect.reserve(nTargetHeight - nHeight);
         CBlockIndex *pindexIter = pindexMostWork->GetAncestor(nTargetHeight);
+#ifdef COMSYS_COMPACTION
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Trying to get ancestor in reverse.\n", __FILE__, __func__, __LINE__);
+#endif
         while (pindexIter && pindexIter->nHeight != nHeight) {
+#ifdef COMSYS_COMPACTION
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Found at height %d with pos %s.\n", __FILE__, __func__, __LINE__, pindexIter->nHeight, pindexIter->GetBlockPos().ToString());
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Trying to get ancestor in reverse.\n", __FILE__, __func__, __LINE__);
+#endif
             vpindexToConnect.push_back(pindexIter);
             pindexIter = pindexIter->pprev;
         }
+#ifdef COMSYS_COMPACTION
+        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Ancestor was NULL.\n", __FILE__, __func__, __LINE__);
+#endif
         nHeight = nTargetHeight;
 
         // Connect new blocks.
         for (CBlockIndex *pindexConnect : reverse_iterate(vpindexToConnect)) {
+#ifdef COMSYS_COMPACTION
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Trying to connect block on height %d with block position %s.\n", __FILE__, __func__, __LINE__, pindexConnect->nHeight, pindexConnect->GetBlockPos().ToString());
+#endif 
             if (!ConnectTip(state, chainparams, pindexConnect, pindexConnect == pindexMostWork ? pblock : std::shared_ptr<const CBlock>(), connectTrace, disconnectpool)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
@@ -2680,6 +2849,13 @@ bool CChainState::ActivateBestChain(CValidationState &state, const CChainParams&
     CBlockIndex *pindexMostWork = nullptr;
     CBlockIndex *pindexNewTip = nullptr;
     int nStopAtHeight = gArgs.GetArg("-stopatheight", DEFAULT_STOPATHEIGHT);
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+    bool leave_loops = false;
+    unsigned int current_block_height = 0;
+    bool is_state_height = (current_block_height % COMPACTION_STEPSIZE == 0 && current_block_height > 0);
+#  endif
+#endif
     do {
         boost::this_thread::interruption_point();
 
@@ -2727,6 +2903,109 @@ bool CChainState::ActivateBestChain(CValidationState &state, const CChainParams&
                     assert(trace.pblock && trace.pindex);
                     GetMainSignals().BlockConnected(trace.pblock, trace.pindex, trace.conflictedTxs);
                 }
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+                handleNewBlock(pblock, pindexNewTip);
+#    ifdef ENABLE_EVALUATION
+                current_block_height = pindexNewTip->nHeight;
+                is_state_height = (current_block_height % COMPACTION_STEPSIZE == 0 && current_block_height > 0);
+
+                // Current block height reflects the header chain, not the verification status of the underlying blocks!
+
+                // Vanilla Synchronization
+                if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+                    evalp_vanilla_synchronization->incrementBlockcount();
+                    if (is_state_height || evalp_vanilla_synchronization->onRelevantTailHeight() || evalp_vanilla_synchronization->inTailPhase()) {
+                        evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_SYNC_TOTAL); // Don't measure writing data
+                        evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+                        evalp_vanilla_synchronization->doMeasurement(current_block_height);
+                        if (evalp_vanilla_synchronization->synchronizationFinished()) {
+                            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Finished measuring vanilla synchronization up to block height %d, hence shutting down.\n", __FILE__, __func__, __LINE__, evalp_vanilla_synchronization->getBlockcount());
+                            StartShutdown();
+                            leave_loops = true;
+                            break;
+                        }
+                        evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_SYNC_TOTAL); // Resume measurement
+                        evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+                    }
+                }
+
+                // Compaction Synchronization
+                if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+                    // For compaction, we can only *set* the blockcount after we successfully installed
+                    // a state - afterwards (in the tail phase), we can increment the block count as usual.
+                    if (evalp_compaction_synchronization->inTailPhase()) {
+                        evalp_compaction_synchronization->incrementBlockcount();
+                    }
+                    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Current header chain height: %u; current processed block height: %u; current measurement block count: %u; is state height: %u.\n", __FILE__, __func__, __LINE__, chainActive.Height(), current_block_height, evalp_compaction_synchronization->getBlockcount(), is_state_height);
+                    // We're never ON state height for compaction eval at this point but have received the first next block
+                    if (evalp_compaction_synchronization->inTailPhase()) {
+                        evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_SYNC_TOTAL); // Don't measure writing data
+                        evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+                        evalp_compaction_synchronization->doMeasurement(current_block_height);
+                        if (evalp_compaction_synchronization->synchronizationFinished()) {
+                            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Finished measuring compaction synchronization up to block height %d, hence shutting down. (%s) \n", __FILE__, __func__, __LINE__, evalp_compaction_synchronization->getBlockcount(), chainActive.Tip()->GetBlockHash().GetHex());
+                            StartShutdown();
+                            leave_loops = true;
+                            break;
+                        }
+                        evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_SYNC_TOTAL); // Resume measurement
+                        evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+                    }
+                }
+
+                // Saving Potential
+                if (evalp_saving_potential != nullptr && evalp_saving_potential->isActive()) {
+                    evalp_saving_potential->updateAccumulatedBlockSize(pblock);
+                    evalp_saving_potential->incrementBlockcount();
+                    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Current header chain height: %u; current processed block height: %u; current measurement block count: %u; is state height: %u.\n", __FILE__, __func__, __LINE__, chainActive.Height(), current_block_height, evalp_saving_potential->getBlockcount(), is_state_height);
+                    if (is_state_height) {
+                        if (current_block_height >= eval_start_state_height) {
+                            CompactionState::setWantToCreateState(current_block_height, &dummy_compaction_state, nullptr, true);
+                        }
+                        eval_last_state_height = current_block_height;
+                        if (eval_last_state_height >= eval_start_state_height) {
+                            evalp_saving_potential->prepareMeasurement(current_block_height, pindexNewTip->nTime);
+                        }
+                    } else if (evalp_saving_potential->onRelevantTailHeight() && current_block_height >= eval_start_state_height) {
+                        pcoinsTip->Flush();
+                        evalp_saving_potential->doMeasurement(current_block_height, pindexNewTip->nTime, false);
+                    }
+                    if (evalp_saving_potential->synchronizationFinished()) {
+                        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Finished measuring saving potential up to block height %u, hence shutting down (max count was %u).\n", __FILE__, __func__, __LINE__, evalp_saving_potential->getBlockcount(), evalp_saving_potential->getMaxBlockcount());
+                        StartShutdown();
+                        leave_loops = true;
+                        break;
+                    }
+                    // Force creation of state exactly on state height
+                    if (is_state_height && current_block_height >= eval_start_state_height) {
+                        leave_loops = true;
+                        LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: I am on a state height (%u) and thus should be leaving ActivateBestChain now.\n", __FILE__, __func__, __LINE__, current_block_height);
+                        break;
+                    }
+                }
+
+                // State creation measurement
+                if (evalp_state_creation != nullptr && evalp_state_creation->isActive()) {
+                    if (is_state_height) {
+                        CompactionState::setWantToCreateState(current_block_height, &dummy_compaction_state, nullptr, true);
+                        eval_last_state_height = current_block_height;
+                        if (eval_last_state_height >= eval_start_state_height) {
+                            evalp_state_creation->prepareMeasurement(current_block_height);
+                        }
+                    }
+                }
+
+                if (shutdownAtHeight > 0 && shutdownAtHeight <= current_block_height && pindexNewTip->IsValid(BLOCK_VALID_MASK)) {
+                    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Reached shutdownAtHeight=%d, hence shutting down.\n", __FILE__, __func__, __LINE__, shutdownAtHeight);
+                    StartShutdown();
+                    leave_loops = true;
+                    break;
+                }
+#    endif
+#  endif
+#endif
+
             } while (!chainActive.Tip() || (starting_tip && CBlockIndexWorkComparator()(chainActive.Tip(), starting_tip)));
             if (!blocks_connected) return true;
 
@@ -2753,6 +3032,14 @@ bool CChainState::ActivateBestChain(CValidationState &state, const CChainParams&
         // that the best block hash is non-null.
         if (ShutdownRequested())
             break;
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+        if (leave_loops) {
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Leaving ActivateBestChain now on height %u.\n", __FILE__, __func__, __LINE__, current_block_height);
+            break;
+        }
+#  endif
+#endif
     } while (pindexNewTip != pindexMostWork);
     CheckBlockIndex(chainparams.GetConsensus());
 
@@ -2956,7 +3243,13 @@ void CChainState::ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pi
     pindexNew->RaiseValidity(BLOCK_VALID_TRANSACTIONS);
     setDirtyBlockIndex.insert(pindexNew);
 
+#ifdef COMSYS_COMPACTION
+    // +1 is important since state on height 10000 means that the next block to process
+    // has height 10001
+    if ((currentState != nullptr && pindexNew->nHeight == currentState->getHeight() + 1) || pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx) {
+#else
     if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx) {
+#endif
         // If pindexNew is the genesis block or all parents are BLOCK_VALID_TRANSACTIONS.
         std::deque<CBlockIndex*> queue;
         queue.push_back(pindexNew);
@@ -3430,6 +3723,23 @@ bool ProcessNewBlockHeaders(const std::vector<CBlockHeader>& headers, CValidatio
         }
     }
     NotifyHeaderTip();
+#ifdef COMSYS_COMPACTION
+    LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Processed bunch of block headers up to height %u\n", __FILE__, __func__, __LINE__, (*ppindex)->nHeight);
+    header_chain_best_known = ((*ppindex)->nHeight >= header_chain_best_known) ? (*ppindex)->nHeight : header_chain_best_known;
+    bool switched_to_full_sync = switchToFullSync(&downloaded_state, header_chain_best_known);
+#  ifdef ENABLE_EVALUATION
+    if (switched_to_full_sync) {
+        if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+            evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_SYNC_TOTAL);
+            evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_PREPARATION_TOTAL);
+            evalp_compaction_synchronization->doMeasurement(currentState->getHeight());
+            evalp_compaction_synchronization->setBlockcount(currentState->getHeight());
+            evalp_compaction_synchronization->enterTailPhase();
+            evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_FULL_SYNC_TOTAL);
+        }
+    }
+#  endif
+#endif
     return true;
 }
 
@@ -3536,19 +3846,68 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
 {
     AssertLockNotHeld(cs_main);
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+    if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+        evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_BLOCK_TOTAL);
+    } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+        evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_BLOCK_TOTAL);
+    }
+#  endif
+#endif
+
     {
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+        if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+            evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_CHECK_BLOCK);
+        } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+            evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_CHECK_BLOCK);
+        }
+        // moved initialization of "startCheck" here (see above)
+#  endif
+#endif
+        // NOTE: pindex is a dummy block index, during state processing there is no way of
+        //       accurately telling a block height (because we willingly strip that away!)
         CBlockIndex *pindex = nullptr;
         if (fNewBlock) *fNewBlock = false;
         CValidationState state;
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
         bool ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+        if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+            evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_CHECK_BLOCK);
+        } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+            evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_CHECK_BLOCK);
+        }
+#  endif
+#endif
 
         LOCK(cs_main);
 
         if (ret) {
             // Store to disk
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+            if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+                evalp_vanilla_synchronization->startMeasurement(EVAL_TIMER_STORE_BLOCK);
+            } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+                evalp_compaction_synchronization->startMeasurement(EVAL_TIMER_STORE_BLOCK);
+            }
+#  endif
+#endif
             ret = g_chainstate.AcceptBlock(pblock, state, chainparams, &pindex, fForceProcessing, nullptr, fNewBlock);
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+            if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+                evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_STORE_BLOCK);
+            } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+                evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_STORE_BLOCK);
+            }
+#  endif
+#endif
         }
         if (!ret) {
             GetMainSignals().BlockChecked(*pblock, state);
@@ -3562,6 +3921,15 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
     if (!g_chainstate.ActivateBestChain(state, chainparams, pblock))
         return error("%s: ActivateBestChain failed (%s)", __func__, FormatStateMessage(state));
 
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_EVALUATION
+    if (evalp_vanilla_synchronization && evalp_vanilla_synchronization->isActive()) {
+        evalp_vanilla_synchronization->stopMeasurement(EVAL_TIMER_BLOCK_TOTAL);
+    } else if (evalp_compaction_synchronization && evalp_compaction_synchronization->isActive()) {
+        evalp_compaction_synchronization->stopMeasurement(EVAL_TIMER_BLOCK_TOTAL);
+    }
+#  endif
+#endif
     return true;
 }
 
@@ -3838,6 +4206,12 @@ bool CChainState::LoadBlockIndex(const Consensus::Params& consensus_params, CBlo
         vSortedByHeight.push_back(std::make_pair(pindex->nHeight, pindex));
     }
     sort(vSortedByHeight.begin(), vSortedByHeight.end());
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+    // The first block with transactions but without predecessor transactions must be considered valid.
+    bool first = true;
+#  endif
+#endif
     for (const std::pair<int, CBlockIndex*>& item : vSortedByHeight)
     {
         CBlockIndex* pindex = item.second;
@@ -3857,6 +4231,15 @@ bool CChainState::LoadBlockIndex(const Consensus::Params& consensus_params, CBlo
                 pindex->nChainTx = pindex->nTx;
             }
         }
+#ifdef COMSYS_COMPACTION
+#  ifdef ENABLE_COMPACTION
+        if(first && pindex->nTx > 0 && pindex->pprev && !pindex->pprev->nChainTx) {
+            LogPrint(BCLog::COMPACTION, "log-compaction: %s,%s,%d: Starting chain at height %d because there are no previous blocks available\n", __FILE__, __func__, __LINE__, pindex->nHeight);
+            pindex->nChainTx = pindex->nTx;
+            first = false;
+        }
+#  endif
+#endif
         if (!(pindex->nStatus & BLOCK_FAILED_MASK) && pindex->pprev && (pindex->pprev->nStatus & BLOCK_FAILED_MASK)) {
             pindex->nStatus |= BLOCK_FAILED_CHILD;
             setDirtyBlockIndex.insert(pindex);

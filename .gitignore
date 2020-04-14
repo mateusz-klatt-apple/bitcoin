@@ -1,18 +1,61 @@
-*.tar.gz
+# no binaries
+*.o
+*.a
+*.la
+*.lo
+*.Po
 
-*.exe
-src/bitcoin
-src/bitcoind
+/build
+/.metadata
+/src/emptyDataDir
+.ccache
+
+### Added by Arthur
+libtool
+test/functional/config.ini
+test/util/buildenv.py
+src/config/bitcoin-config.h.in~
+src/test/data/script_tests.json.h
+src/test/data/base58_keys_valid.json.h
+src/test/data/base58_encode_decode.json.h
+src/test/data/base58_keys_invalid.json.h
+src/test/data/tx_invalid.json.h
+src/test/data/tx_valid.json.h
+src/test/data/sighash.json.h
+src/test/test_bitcoin_fuzzy
+src/.deps
+
+### Roman's extended list
+
+# Bitcoin binaries
+libbitcoinconsensus.pc
 src/bitcoin-cli
 src/bitcoin-tx
-src/test/test_bitcoin
-src/test/test_bitcoin_fuzzy
-src/qt/test/test_bitcoin-qt
+src/bitcoind
 
-# autoreconf
+# Some of the filled-in template files
+Makefile
 Makefile.in
 aclocal.m4
-autom4te.cache/
+autom4te.cache
+doc/Makefile
+doc/Makefile.in
+test/config.ini
+
+# Configure-related output
+config.log
+config.status
+configure
+src/config/bitcoin-config.h
+src/config/bitcoin-config.h.in
+src/config/stamp-h1
+
+# Garbage folders
+.deps
+.dirstamp
+
+# Build auxiliaries
+build-aux/compile
 build-aux/config.guess
 build-aux/config.sub
 build-aux/depcomp
@@ -116,3 +159,7 @@ test/cache/*
 
 libbitcoinconsensus.pc
 contrib/devtools/split-debug.sh
+share/qt/Info.plist
+share/setup.nsi
+src/test/test_bitcoin
+Session.vim
