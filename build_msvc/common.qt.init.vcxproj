@@ -2,15 +2,18 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
   <PropertyGroup Label="QtGlobals">
-    <QtBaseDir>C:\Qt5.9.8_x64_static_vs2019</QtBaseDir>
+    <QtBaseDir>C:\tools\vcpkg\installed\$(VcpkgTriplet)</QtBaseDir>
+    <QtBaseDirDebug>$(QtBaseDir)\debug</QtBaseDirDebug>
     <QtPluginsLibraryDir>$(QtBaseDir)\plugins</QtPluginsLibraryDir>
+    <QtPluginsLibraryDirDebug>$(QtBaseDirDebug)\plugins</QtPluginsLibraryDirDebug>
     <QtLibraryDir>$(QtBaseDir)\lib</QtLibraryDir>
+    <QtLibraryDirDebug>$(QtBaseDirDebug)\lib</QtLibraryDirDebug>
     <QtIncludeDir>$(QtBaseDir)\include</QtIncludeDir>
     <QtIncludes>$(QtIncludeDir);$(QtIncludeDir)\QtNetwork;$(QtIncludeDir)\QtCore;$(QtIncludeDir)\QtWidgets;$(QtIncludeDir)\QtGui;</QtIncludes>
     <GeneratedFilesOutDir>.\QtGeneratedFiles\qt</GeneratedFilesOutDir>
-    <QtToolsDir>$(QtBaseDir)\bin</QtToolsDir>
-    <QtReleaseLibraries>$(QtPluginsLibraryDir)\platforms\qminimal.lib;$(QtPluginsLibraryDir)\platforms\qwindows.lib;$(QtLibraryDir)\qtfreetype.lib;$(QtLibraryDir)\qtharfbuzz.lib;$(QtLibraryDir)\qtlibpng.lib;$(QtLibraryDir)\qtpcre2.lib;$(QtLibraryDir)\Qt5AccessibilitySupport.lib;$(QtLibraryDir)\Qt5Core.lib;$(QtLibraryDir)\Qt5Concurrent.lib;$(QtLibraryDir)\Qt5EventDispatcherSupport.lib;$(QtLibraryDir)\Qt5FontDatabaseSupport.lib;$(QtLibraryDir)\Qt5Gui.lib;$(QtLibraryDir)\Qt5Network.lib;$(QtLibraryDir)\Qt5PlatformCompositorSupport.lib;$(QtLibraryDir)\Qt5ThemeSupport.lib;$(QtLibraryDir)\Qt5Widgets.lib;$(QtLibraryDir)\Qt5WinExtras.lib;$(QtLibraryDir)\qtmain.lib;userenv.lib;netapi32.lib;imm32.lib;Dwmapi.lib;version.lib;winmm.lib;UxTheme.lib</QtReleaseLibraries>
-    <QtDebugLibraries>$(QtPluginsLibraryDir)\platforms\qwindowsd.lib;$(QtPluginsLibraryDir)\platforms\qminimald.lib;$(QtLibraryDir)\*d.lib;crypt32.lib;userenv.lib;netapi32.lib;imm32.lib;Dwmapi.lib;version.lib;winmm.lib;UxTheme.lib</QtDebugLibraries>
+    <QtToolsDir>$(QtBaseDir)\tools\qt5\bin</QtToolsDir>
+    <QtReleaseLibraries>$(QtLibraryDir)\manual-link\qtmain.lib;$(QtPluginsLibraryDir)\platforms\*.lib;$(QtLibraryDir)\Qt5*.lib;crypt32.lib;userenv.lib;wtsapi32.lib;netapi32.lib;imm32.lib;Dwmapi.lib;version.lib;winmm.lib;UxTheme.lib</QtReleaseLibraries>
+    <QtDebugLibraries>$(QtLibraryDirDebug)\manual-link\qtmaind.lib;$(QtPluginsLibraryDirDebug)\platforms\*.lib;$(QtLibraryDirDebug)\Qt5*.lib;crypt32.lib;userenv.lib;wtsapi32.lib;netapi32.lib;imm32.lib;Dwmapi.lib;version.lib;winmm.lib;UxTheme.lib</QtDebugLibraries>
   </PropertyGroup>
 
 </Project>

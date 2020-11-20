@@ -1,3 +1,15 @@
+Build Status
+========================================
+
+Linux Build
+----------------
+![Travis](https://travis-ci.org/mateusz-klatt/bitcoin.svg?branch=master)
+
+Windows Build
+----------------
+![AppVeyor](https://ci.appveyor.com/api/projects/status/github/mateusz-klatt/bitcoin?branch=master&svg=true)
+
+
 Bitcoin Core integration/staging tree
 =====================================
 

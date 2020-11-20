@@ -11,18 +11,13 @@
 
 #include <QApplication>
 
-static const struct {
-    const char *networkId;
-    const char *appName;
-    const int iconColorHueShift;
-    const int iconColorSaturationReduction;
-} network_styles[] = {
+network_styles_array network_styles[] = {
     {"main", QAPP_APP_NAME_DEFAULT, 0, 0},
     {"test", QAPP_APP_NAME_TESTNET, 70, 30},
     {"signet", QAPP_APP_NAME_SIGNET, 35, 15},
     {"regtest", QAPP_APP_NAME_REGTEST, 160, 30},
 };
-static const unsigned network_styles_count = sizeof(network_styles)/sizeof(*network_styles);
+const unsigned network_styles_count = sizeof(network_styles)/sizeof(*network_styles);
 
 // titleAddText needs to be const char* for tr()
 NetworkStyle::NetworkStyle(const QString &_appName, const int iconColorHueShift, const int iconColorSaturationReduction, const char *_titleAddText):

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 <PropertyGroup><BuildDependsOn>$(BuildDependsOn);CopyBuildArtifacts</BuildDependsOn></PropertyGroup>
-  <Target Name="CopyBuildArtifacts" Condition="'$(ConfigurationType)' != 'StaticLibrary'">
+  <Target Name="CopyBuildArtifacts" Condition="'$(ConfigurationType)' != 'StaticLibrary' and '$(TargetName)' != 'CodeSignRegisterOutput'">
     <ItemGroup>
       <BuildArtifacts Include="$(OutDir)$(TargetName)$(TargetExt)"></BuildArtifacts>
       <BuildArtifacts Include="$(OutDir)$(TargetName).pdb"></BuildArtifacts>

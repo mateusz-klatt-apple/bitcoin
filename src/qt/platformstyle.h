@@ -14,7 +14,7 @@ class PlatformStyle
 {
 public:
     /** Get style associated with provided platform name, or 0 if not known */
-    static const PlatformStyle *instantiate(const QString &platformId);
+    static const PlatformStyle *instantiate(const QString &platformId, const std::string &networkId = "");
 
     const QString &getName() const { return name; }
 
@@ -37,7 +37,7 @@ public:
     QIcon TextColorIcon(const QIcon& icon) const;
 
 private:
-    PlatformStyle(const QString &name, bool imagesOnButtons, bool colorizeIcons, bool useExtraSpacing);
+    PlatformStyle(const QString &name, bool imagesOnButtons, bool colorizeIcons, bool useExtraSpacing, const std::string &network);
 
     QString name;
     bool imagesOnButtons;
