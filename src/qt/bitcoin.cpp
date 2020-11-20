@@ -211,16 +211,16 @@ BitcoinApplication::BitcoinApplication():
     setQuitOnLastWindowClosed(false);
 }
 
-void BitcoinApplication::setupPlatformStyle()
+void BitcoinApplication::setupPlatformStyle(const std::string& networkId)
 {
     // UI per-platform customization
     // This must be done inside the BitcoinApplication constructor, or after it, because
     // PlatformStyle::instantiate requires a QApplication
     std::string platformName;
     platformName = gArgs.GetArg("-uiplatform", BitcoinGUI::DEFAULT_UIPLATFORM);
-    platformStyle = PlatformStyle::instantiate(QString::fromStdString(platformName));
+    platformStyle = PlatformStyle::instantiate(QString::fromStdString(platformName), networkId);
     if (!platformStyle) // Fall back to "other" if specified name not found
-        platformStyle = PlatformStyle::instantiate("other");
+        platformStyle = PlatformStyle::instantiate("other", networkId);
     assert(platformStyle);
 }
 
@@ -484,6 +484,7 @@ int GuiMain(int argc, char* argv[])
 
     // Now that the QApplication is setup and we have parsed our parameters, we can set the platform style
     app.setupPlatformStyle();
+    app.setStyle(("fusion"));
 
     /// 3. Application identification
     // must be set before OptionsModel is initialized or translations are loaded,
@@ -555,6 +556,7 @@ int GuiMain(int argc, char* argv[])
     }
 
     QScopedPointer<const NetworkStyle> networkStyle(NetworkStyle::instantiate(Params().NetworkIDString()));
+    app.setupPlatformStyle(Params().NetworkIDString());
     assert(!networkStyle.isNull());
     // Allow for separate UI settings for testnets
     QApplication::setApplicationName(networkStyle->getAppName());

@@ -9,6 +9,16 @@
 #include <QPixmap>
 #include <QString>
 
+typedef struct {
+    const char* networkId;
+    const char* appName;
+    const int iconColorHueShift;
+    const int iconColorSaturationReduction;
+} network_styles_array;
+
+extern network_styles_array network_styles[];
+extern const unsigned network_styles_count;
+
 /* Coin network-specific GUI style information */
 class NetworkStyle
 {

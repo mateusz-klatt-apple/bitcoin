@@ -1,0 +1,136 @@
+<Project>
+
+  <Target Name="CodeSignToolRestore">
+    <Exec Command="dotnet -d tool restore" />
+  </Target>
+
+  <Target Name="CodeSignAppHost"
+          Condition="'$(CodeSign)' == 'true'"
+          DependsOnTargets="CodeSignToolRestore"
+          AfterTargets="_CreateAppHost"
+          Inputs="$(AppHostIntermediatePath)"
+          Outputs="$(IntermediateOutputPath)apphost.codesign.cache">
+    <PropertyGroup>
+      <TargetName>CodeSignAppHost</TargetName>
+      <ToolName>azuresigntool</ToolName>
+      <SignFile>$(AppHostIntermediatePath)</SignFile>
+      <CacheFile>$(IntermediateOutputPath)apphost.codesign.cache</CacheFile>
+      <Program>dotnet tool run $(ToolName) sign</Program>
+      <Program>$(Program) --no-page-hashing</Program>
+      <Program>$(Program) --description "$(CodeSignDescription)"</Program>
+      <Program>$(Program) --description-url "$(CodeSignDescriptionUrl)"</Program>
+      <Program>$(Program) --file-digest $(CodeSignFileDigest)</Program>
+      <Program>$(Program) --timestamp-rfc3161 $(CodeSignTimestampUrl)</Program>
+      <Program>$(Program) --timestamp-digest $(CodeSignTimestampDigest)</Program>
+      <Program>$(Program) --azure-key-vault-url $(AzureKeyVaultUrl)</Program>
+      <Program>$(Program) --azure-key-vault-client-id $(AzureKeyVaultClientId)</Program>
+      <Program>$(Program) --azure-key-vault-client-secret $(AzureKeyVaultClientSecret)</Program>
+      <Program>$(Program) --azure-key-vault-certificate $(AzureKeyVaultCertificate)</Program>
+      <Program>$(Program) "$(SignFile)"</Program>
+    </PropertyGroup>
+    <Exec Command="$(Program)" IgnoreExitCode="true" EchoOff="true">
+      <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
+    </Exec>
+    <Error Text="Error while executing $(TargetName)" Condition="'$(ErrorCode)' != '0'" />
+    <Warning Text="Signed $(SignFile)" />
+    <WriteLinesToFile Lines="$([System.DateTime]::Now.ToString())"
+                      File="$(CacheFile)" Overwrite="true" />
+  </Target>
+
+  <Target Name="CodeSignRegisterOutput"
+          Condition="'$(CodeSign)' == 'true' and ('$(TargetExt)' == '.exe' or '$(TargetExt)' == '.dll')"
+          DependsOnTargets="CodeSignToolRestore"
+          BeforeTargets="RegisterOutput"
+          Inputs="$(TargetPath)"
+          Outputs="$(IntermediateOutputPath)$(TargetFileName).codesign.cache">
+    <PropertyGroup>
+      <TargetName>CodeSignRegisterOutput</TargetName>
+      <ToolName>azuresigntool</ToolName>
+      <SignFile>$(TargetPath)</SignFile>
+      <CacheFile>$(IntermediateOutputPath)$(TargetFileName).codesign.cache</CacheFile>
+      <Program>dotnet tool run $(ToolName) sign</Program>
+      <Program>$(Program) --no-page-hashing</Program>
+      <Program>$(Program) --description "$(CodeSignDescription)"</Program>
+      <Program>$(Program) --description-url "$(CodeSignDescriptionUrl)"</Program>
+      <Program>$(Program) --file-digest $(CodeSignFileDigest)</Program>
+      <Program>$(Program) --timestamp-rfc3161 $(CodeSignTimestampUrl)</Program>
+      <Program>$(Program) --timestamp-digest $(CodeSignTimestampDigest)</Program>
+      <Program>$(Program) --azure-key-vault-url $(AzureKeyVaultUrl)</Program>
+      <Program>$(Program) --azure-key-vault-client-id $(AzureKeyVaultClientId)</Program>
+      <Program>$(Program) --azure-key-vault-client-secret $(AzureKeyVaultClientSecret)</Program>
+      <Program>$(Program) --azure-key-vault-certificate $(AzureKeyVaultCertificate)</Program>
+      <Program>$(Program) "$(SignFile)"</Program>
+    </PropertyGroup>
+    <Exec Command="$(Program)" IgnoreExitCode="true" EchoOff="true">
+      <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
+    </Exec>
+    <Error Text="Error while executing $(TargetName)" Condition="'$(ErrorCode)' != '0'" />
+    <Warning Text="Signed $(SignFile)" />
+    <WriteLinesToFile Lines="$([System.DateTime]::Now.ToString())"
+                      File="$(CacheFile)" Overwrite="true" />
+  </Target>
+
+  <Target Name="CodeSignCoreCompile"
+          Condition="'$(CodeSign)' == 'true' and ('$(TargetExt)' == '.exe' or '$(TargetExt)' == '.dll')"
+          DependsOnTargets="CodeSignToolRestore"
+          AfterTargets="CoreCompile"
+          Inputs="$(IntermediateOutputPath)$(TargetFileName)"
+          Outputs="$(IntermediateOutputPath)$(TargetFileName).codesign.cache">
+    <PropertyGroup>
+      <TargetName>CodeSignCoreCompile</TargetName>
+      <ToolName>azuresigntool</ToolName>
+      <SignFile>$(IntermediateOutputPath)$(TargetFileName)</SignFile>
+      <CacheFile>$(IntermediateOutputPath)$(TargetFileName).codesign.cache</CacheFile>
+      <Program>dotnet tool run $(ToolName) sign</Program>
+      <Program>$(Program) --no-page-hashing</Program>
+      <Program>$(Program) --description "$(CodeSignDescription)"</Program>
+      <Program>$(Program) --description-url "$(CodeSignDescriptionUrl)"</Program>
+      <Program>$(Program) --file-digest $(CodeSignFileDigest)</Program>
+      <Program>$(Program) --timestamp-rfc3161 $(CodeSignTimestampUrl)</Program>
+      <Program>$(Program) --timestamp-digest $(CodeSignTimestampDigest)</Program>
+      <Program>$(Program) --azure-key-vault-url $(AzureKeyVaultUrl)</Program>
+      <Program>$(Program) --azure-key-vault-client-id $(AzureKeyVaultClientId)</Program>
+      <Program>$(Program) --azure-key-vault-client-secret $(AzureKeyVaultClientSecret)</Program>
+      <Program>$(Program) --azure-key-vault-certificate $(AzureKeyVaultCertificate)</Program>
+      <Program>$(Program) "$(SignFile)"</Program>
+    </PropertyGroup>
+    <Exec Command="$(Program)" IgnoreExitCode="true" EchoOff="true">
+      <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
+    </Exec>
+    <Error Text="Error while executing $(TargetName)" Condition="'$(ErrorCode)' != '0'" />
+    <Warning Text="Signed $(SignFile)" />
+    <WriteLinesToFile Lines="$([System.DateTime]::Now.ToString())"
+                      File="$(CacheFile)" Overwrite="true" />
+  </Target>
+
+  <Target Name="CodeSignPackage"
+          Condition="'$(PackageSign)' == 'true'"
+          DependsOnTargets="CodeSignToolRestore"
+          AfterTargets="GenerateNuspec"
+          Inputs="$(PackageOutputAbsolutePath)$(PackageId).$(PackageVersion).nupkg"
+          Outputs="$(IntermediateOutputPath)$(PackageId)$(PackageVersion).codesign.cache">
+    <PropertyGroup>
+      <TargetName>CodeSignPackage</TargetName>
+      <ToolName>NuGetKeyVaultSignTool</ToolName>
+      <SignFile>$(PackageOutputAbsolutePath)$(PackageId).$(PackageVersion).nupkg</SignFile>
+      <CacheFile>$(IntermediateOutputPath)$(PackageId)$(PackageVersion).codesign.cache</CacheFile>
+      <Program>dotnet tool run $(ToolName) sign</Program>
+      <Program>$(Program) --file-digest $(CodeSignFileDigest)</Program>
+      <Program>$(Program) --timestamp-rfc3161 $(CodeSignTimestampUrl)</Program>
+      <Program>$(Program) --timestamp-digest $(CodeSignTimestampDigest)</Program>
+      <Program>$(Program) --azure-key-vault-url $(AzureKeyVaultUrl)</Program>
+      <Program>$(Program) --azure-key-vault-client-id $(AzureKeyVaultClientId)</Program>
+      <Program>$(Program) --azure-key-vault-client-secret $(AzureKeyVaultClientSecret)</Program>
+      <Program>$(Program) --azure-key-vault-certificate $(AzureKeyVaultCertificate)</Program>
+      <Program>$(Program) "$(SignFile)"</Program>
+    </PropertyGroup>
+    <Exec Command="$(Program)" IgnoreExitCode="true" EchoOff="true">
+      <Output TaskParameter="ExitCode" PropertyName="ErrorCode" />
+    </Exec>
+    <Error Text="Error while executing $(TargetName)" Condition="'$(ErrorCode)' != '0'" />
+    <Warning Text="Signed $(SignFile)" />
+    <WriteLinesToFile Lines="$([System.DateTime]::Now.ToString())"
+                      File="$(CacheFile)" Overwrite="true" />
+  </Target>
+
+</Project>

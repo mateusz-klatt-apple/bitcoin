@@ -61,7 +61,9 @@ int main(int argc, char* argv[])
     // platform ("xcb", "windows", or "cocoa") so tests can't unintentionally
     // interfere with any background GUIs and don't require extra resources.
     #if defined(WIN32)
+        #if QT_VERSION_MINOR < 10
         if (getenv("QT_QPA_PLATFORM") == nullptr) _putenv_s("QT_QPA_PLATFORM", "minimal");
+        #endif
     #else
         setenv("QT_QPA_PLATFORM", "minimal", /* overwrite */ 0);
     #endif

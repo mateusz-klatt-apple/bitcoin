@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <qt/networkstyle.h>
 #include <qt/platformstyle.h>
 
 #include <QApplication>
@@ -68,7 +69,7 @@ QIcon ColorizeIcon(const QString& filename, const QColor& colorbase)
 }
 
 
-PlatformStyle::PlatformStyle(const QString &_name, bool _imagesOnButtons, bool _colorizeIcons, bool _useExtraSpacing):
+PlatformStyle::PlatformStyle(const QString &_name, bool _imagesOnButtons, bool _colorizeIcons, bool _useExtraSpacing, const std::string& _network):
     name(_name),
     imagesOnButtons(_imagesOnButtons),
     colorizeIcons(_colorizeIcons),
@@ -76,6 +77,43 @@ PlatformStyle::PlatformStyle(const QString &_name, bool _imagesOnButtons, bool _
     singleColor(0,0,0),
     textColor(0,0,0)
 {
+    auto coin_color = QColor(247, 147, 26);
+    for (unsigned x = 0; x < network_styles_count; ++x) {
+        if (network_styles[x].networkId == _network) {
+            auto iconColorHueShift = network_styles[x].iconColorHueShift;
+            auto iconColorSaturationReduction = network_styles[x].iconColorSaturationReduction;
+            int h, s, l, a;
+            coin_color.getHsl(&h, &s, &l, &a);
+            h += iconColorHueShift;
+            if (s > iconColorSaturationReduction) {
+                s -= iconColorSaturationReduction;
+            }
+            coin_color.setHsl(h, s, l, a);
+        }
+    }
+    imagesOnButtons = true;
+    colorizeIcons = true;
+    QPalette palette;
+    palette.setColor(QPalette::Window, QColor(53,53,53));
+    palette.setColor(QPalette::WindowText, Qt::white);
+    palette.setColor(QPalette::Base, QColor(15,15,15));
+    palette.setColor(QPalette::AlternateBase, QColor(53,53,53));
+    palette.setColor(QPalette::ToolTipBase, coin_color);
+    palette.setColor(QPalette::ToolTipText, Qt::white);
+    palette.setColor(QPalette::Text, Qt::white);
+    palette.setColor(QPalette::Button, QColor(53,53,53));
+    palette.setColor(QPalette::ButtonText, Qt::white);
+    palette.setColor(QPalette::BrightText, coin_color);
+    palette.setColor(QPalette::Highlight, coin_color);
+    palette.setColor(QPalette::Link, coin_color);
+    palette.setColor(QPalette::HighlightedText, Qt::black);
+    palette.setColor(QPalette::Active, QPalette::Button, QColor(53, 53, 53));
+    palette.setColor(QPalette::Disabled, QPalette::Text, Qt::darkGray);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, Qt::darkGray);
+    palette.setColor(QPalette::Disabled, QPalette::HighlightedText, Qt::darkGray);
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, Qt::darkGray);
+    palette.setColor(QPalette::Disabled, QPalette::Light, QColor(53, 53, 53));
+    qApp->setPalette(palette);
     // Determine icon highlighting color
     if (colorizeIcons) {
         const QColor colorHighlightBg(QApplication::palette().color(QPalette::Highlight));
@@ -119,7 +157,7 @@ QIcon PlatformStyle::TextColorIcon(const QIcon& icon) const
     return ColorizeIcon(icon, TextColor());
 }
 
-const PlatformStyle *PlatformStyle::instantiate(const QString &platformId)
+const PlatformStyle *PlatformStyle::instantiate(const QString &platformId, const std::string &networkId)
 {
     for (unsigned x=0; x<platform_styles_count; ++x)
     {
@@ -129,7 +167,8 @@ const PlatformStyle *PlatformStyle::instantiate(const QString &platformId)
                     platform_styles[x].platformId,
                     platform_styles[x].imagesOnButtons,
                     platform_styles[x].colorizeIcons,
-                    platform_styles[x].useExtraSpacing);
+                    platform_styles[x].useExtraSpacing,
+                    networkId);
         }
     }
     return nullptr;

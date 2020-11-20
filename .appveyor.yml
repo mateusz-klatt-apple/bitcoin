@@ -1,62 +1,53 @@
 version: '{branch}.{build}'
 skip_tags: true
-image: Previous Visual Studio 2019
+image: Visual Studio 2019
 configuration: Release
 platform: x64
 clone_depth: 5
+cache:
+- C:\tools\vcpkg\installed
 environment:
+  CODE_SIGNING_CLOUD:
+    secure: A3e3o/F1R4NmHP5DD/4VvG63efa6NaM4pq3WTH8BSnyUfSZQYB4ph4rRhPptsl1D
+  VCPKG_PLATFORM_TOOLSET: v142
   PATH: 'C:\Python37-x64;C:\Python37-x64\Scripts;%PATH%'
   PYTHONUTF8: 1
-  QT_DOWNLOAD_URL: 'https://github.com/sipsorcery/qt_win_binary/releases/download/v1.6/Qt5.9.8_x64_static_vs2019.zip'
-  QT_DOWNLOAD_HASH: '9a8c6eb20967873785057fdcd329a657c7f922b0af08c5fde105cc597dd37e21'
-  QT_LOCAL_PATH: 'C:\Qt5.9.8_x64_static_vs2019'
-  VCPKG_INSTALL_PATH: 'C:\tools\vcpkg\installed'
-  VCPKG_COMMIT_ID: '40230b8e3f6368dcb398d649331be878ca1e9007'
 install:
-# Disable zmq test for now since python zmq library on Windows would cause Access violation sometimes.
-# - cmd: pip install zmq
-# Powershell block below is to install the c++ dependencies via vcpkg. The pseudo code is:
-#    a. Checkout the vcpkg source (including port files) for the specific checkout and build the vcpkg binary,
-#    b. Install the missing packages using the vcpkg manifest.
 - ps: |
       cd c:\tools\vcpkg
       $env:GIT_REDIRECT_STDERR = '2>&1' # git is writing non-errors to STDERR when doing git pull. Send to STDOUT instead.
       git pull origin master > $null
-      git -c advice.detachedHead=false checkout $env:VCPKG_COMMIT_ID
       .\bootstrap-vcpkg.bat > $null
+      vcpkg install --triplet x64-windows-static berkeleydb
+      vcpkg install --triplet x64-windows-static boost-filesystem
+      vcpkg install --triplet x64-windows-static boost-multi-index
+      vcpkg install --triplet x64-windows-static boost-process
+      vcpkg install --triplet x64-windows-static boost-signals2
+      vcpkg install --triplet x64-windows-static boost-test
+      vcpkg install --triplet x64-windows-static boost-thread
+      vcpkg install --triplet x64-windows-static sqlite3
+      vcpkg install --triplet x64-windows-static libevent[thread]
+      vcpkg install --triplet x64-windows-static double-conversion
+      vcpkg install --triplet x64-windows-static zeromq
+      vcpkg install --triplet x64-windows-static icu
+      vcpkg install --triplet x64-windows-static pcre2
+      vcpkg install --triplet x64-windows-static libjpeg-turbo
+      vcpkg install --triplet x64-windows-static libpq[openssl,zlib]
+      vcpkg install --triplet x64-windows-static qt5-base
       cd "$env:APPVEYOR_BUILD_FOLDER"
 before_build:
-# Powershell block below is to download and extract the Qt static libraries. The pseudo code is:
-#    a. Download the zip file with the prebuilt Qt static libraries.
-#    b. Check that the downloaded file matches the expected hash.
-#    c. Extract the zip file to the specific destination path expected by the msbuild projects.
-- ps: |
-      Write-Host "Downloading Qt binaries.";
-      Invoke-WebRequest -Uri $env:QT_DOWNLOAD_URL -Out qtdownload.zip;
-      Write-Host "Qt binaries successfully downloaded, checking hash against $env:QT_DOWNLOAD_HASH...";
-      if((Get-FileHash qtdownload.zip).Hash -eq $env:QT_DOWNLOAD_HASH) {
-        Expand-Archive qtdownload.zip -DestinationPath $env:QT_LOCAL_PATH;
-        Write-Host "Qt binary download matched the expected hash.";
-      }
-      else {
-        Write-Host "ERROR: Qt binary download did not match the expected hash.";
-        Exit-AppveyorBuild;
-      }
 - cmd: python build_msvc\msvc-autogen.py
 build_script:
-- cmd: msbuild /p:TrackFileAccess=false build_msvc\bitcoin.sln /m /v:q /nologo
+- cmd: msbuild /p:CodeSign=true /p:TrackFileAccess=false build_msvc\bitcoin.sln /v:q /nologo
 after_build:
-#- 7z a bitcoin-%APPVEYOR_BUILD_VERSION%.zip %APPVEYOR_BUILD_FOLDER%\build_msvc\%platform%\%configuration%\*.exe
-test_script:
-- cmd: src\test_bitcoin.exe -l test_suite
-- cmd: src\bench_bitcoin.exe > NUL
-- ps:  python test\util\bitcoin-util-test.py
-- cmd: python test\util\rpcauth-test.py
-# Fee estimation test failing on appveyor with: WinError 10048] Only one usage of each socket address (protocol/network address/port) is normally permitted.
-# functional tests disabled for now. See
-# https://github.com/bitcoin/bitcoin/pull/18626#issuecomment-613396202
-# https://github.com/bitcoin/bitcoin/issues/18623
-# - cmd: python test\functional\test_runner.py --ci --quiet --combinedlogslen=4000 --failfast --exclude feature_fee_estimation
+#- cmd: build_msvc\sign.bat
+- cmd: 7z a bitcoin-%APPVEYOR_BUILD_VERSION%.zip %APPVEYOR_BUILD_FOLDER%\build_msvc\%platform%\%configuration%\bitcoin-qt.exe
 artifacts:
-#- path: bitcoin-%APPVEYOR_BUILD_VERSION%.zip
-deploy: off
+- path: bitcoin-%APPVEYOR_BUILD_VERSION%.zip
+deploy:
+  provider: GitHub
+  auth_token:
+    secure: uiOiWPYkpsG1/nDKwbUTW5WjG1o2VatrLkho8PK49Q9hteRSk7vO5cpnRscCMreR
+  artifact: bitcoin-%APPVEYOR_BUILD_VERSION%.zip
+  on:
+    branch: release

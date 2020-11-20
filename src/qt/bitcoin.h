@@ -88,7 +88,7 @@ public:
     WId getMainWinId() const;
 
     /// Setup platform style
-    void setupPlatformStyle();
+    void setupPlatformStyle(const std::string& networkId = "");
 
     interfaces::Node& node() const { assert(m_node); return *m_node; }
     void setNode(interfaces::Node& node);
