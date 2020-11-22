@@ -57,7 +57,7 @@
     </ClCompile>
     <Link>
       <AdditionalDependencies>$(QtReleaseLibraries);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalOptions>/ignore:4206</AdditionalOptions>
+      <AdditionalOptions>/ignore:4206 %(AdditionalOptions)</AdditionalOptions>
       <SubSystem>Windows</SubSystem>
     </Link>
     <ResourceCompile>
@@ -72,7 +72,7 @@
     </ClCompile>
     <Link>
       <AdditionalDependencies>$(QtDebugLibraries);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalOptions>/ignore:4206</AdditionalOptions>
+      <AdditionalOptions>/ignore:4206 %(AdditionalOptions)</AdditionalOptions>
       <SubSystem>Windows</SubSystem>
     </Link>
     <ResourceCompile>
