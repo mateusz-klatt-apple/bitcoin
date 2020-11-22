@@ -8,7 +8,9 @@ set AzureKeyVaultUrl=https://codesignkeyvault.vault.azure.net/
 set AzureKeyVaultClientId=38a04401-d8f1-4d37-ba2f-15b6d53f6cdf
 set AzureKeyVaultClientSecret=%CODE_SIGNING_CLOUD%
 set AzureKeyVaultCertificate=SectigoHome
-set SignFile=%APPVEYOR_BUILD_FOLDER%\build_msvc\%PLATFORM%\%CONFIGURATION%\bitcoin-qt.exe
+set SignFile=%APPVEYOR_BUILD_FOLDER%\bitcoin-%APPVEYOR_BUILD_VERSION%-setup.exe
+
+dotnet -d tool restore
 
 dotnet tool run azuresigntool sign^
  --no-page-hashing --description "%CodeSignDescription%"^

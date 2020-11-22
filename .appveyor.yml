@@ -18,6 +18,7 @@ install:
       $env:GIT_REDIRECT_STDERR = '2>&1' # git is writing non-errors to STDERR when doing git pull. Send to STDOUT instead.
       git pull origin master > $null
       .\bootstrap-vcpkg.bat > $null
+      vcpkg integrate install
       vcpkg install --triplet x64-windows-static berkeleydb
       vcpkg install --triplet x64-windows-static boost-filesystem
       vcpkg install --triplet x64-windows-static boost-multi-index
@@ -34,20 +35,22 @@ install:
       vcpkg install --triplet x64-windows-static libjpeg-turbo
       vcpkg install --triplet x64-windows-static libpq[openssl,zlib]
       vcpkg install --triplet x64-windows-static qt5-base
+      vcpkg install --triplet x64-windows-static libqrencode
+      vcpkg install --triplet x64-windows-static miniupnpc
       cd "$env:APPVEYOR_BUILD_FOLDER"
 before_build:
 - cmd: python build_msvc\msvc-autogen.py
 build_script:
-- cmd: msbuild /p:CodeSign=true /p:TrackFileAccess=false build_msvc\bitcoin.sln /v:q /nologo
+- cmd: msbuild /p:TrackFileAccess=false build_msvc\bitcoin.sln /v:q /nologo
 after_build:
-#- cmd: build_msvc\sign.bat
-- cmd: 7z a bitcoin-%APPVEYOR_BUILD_VERSION%.zip %APPVEYOR_BUILD_FOLDER%\build_msvc\%platform%\%configuration%\bitcoin-qt.exe
+- cmd: '"C:\Program Files (x86)\NSIS\makensis.exe" build_msvc\setup.nsi'
+- cmd: build_msvc\sign.bat
 artifacts:
-- path: bitcoin-%APPVEYOR_BUILD_VERSION%.zip
+- path: bitcoin-%APPVEYOR_BUILD_VERSION%-setup.exe
 deploy:
   provider: GitHub
   auth_token:
     secure: uiOiWPYkpsG1/nDKwbUTW5WjG1o2VatrLkho8PK49Q9hteRSk7vO5cpnRscCMreR
-  artifact: bitcoin-%APPVEYOR_BUILD_VERSION%.zip
+  artifact: bitcoin-%APPVEYOR_BUILD_VERSION%-setup.exe
   on:
-    branch: release
+    APPVEYOR_REPO_TAG: true

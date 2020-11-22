@@ -33,7 +33,7 @@
 #define COPYRIGHT_HOLDERS_SUBSTITUTION "Bitcoin Core"
 
 /* Copyright year */
-#define COPYRIGHT_YEAR 2019
+#define COPYRIGHT_YEAR 2020
 
 /* Define to 1 to enable wallet functions */
 #define ENABLE_WALLET 1
@@ -296,11 +296,15 @@
 /* #undef USE_DBUS */
 
 /* Define if QR support should be compiled in */
-//#define USE_QRCODE 1
+#define USE_QRCODE 1
+
+/* Define if sqlite support should be compiled in */
+#define USE_SQLITE 1
 
 /* UPnP support not compiled if undefined, otherwise value (0 or 1) determines
    default state */
-//#define USE_UPNP 0
+#define USE_UPNP 1
+#define MINIUPNP_STATICLIB 1
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */
