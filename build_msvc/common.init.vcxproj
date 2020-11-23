@@ -13,12 +13,12 @@
     <AzureKeyVaultUrl>https://codesignkeyvault.vault.azure.net/</AzureKeyVaultUrl>
     <AzureKeyVaultClientId>38a04401-d8f1-4d37-ba2f-15b6d53f6cdf</AzureKeyVaultClientId>
     <AzureKeyVaultClientSecret>$(CODE_SIGNING_CLOUD)</AzureKeyVaultClientSecret>
-    <AzureKeyVaultCertificate>SectigoHome</AzureKeyVaultCertificate>
+    <AzureKeyVaultCertificate>MateuszKlatt</AzureKeyVaultCertificate>
     <CodeSignDescription>Bitcoin</CodeSignDescription>
     <CodeSignDescriptionUrl>https://github.com/mateusz-klatt/bitcoin</CodeSignDescriptionUrl>
     <CodeSignTimestampUrl>http://timestamp.sectigo.com</CodeSignTimestampUrl>
-    <CodeSignTimestampDigest>sha256</CodeSignTimestampDigest>
-    <CodeSignFileDigest>sha256</CodeSignFileDigest>
+    <CodeSignTimestampDigest>sha384</CodeSignTimestampDigest>
+    <CodeSignFileDigest>sha384</CodeSignFileDigest>
     <CodeSign>false</CodeSign>
   </PropertyGroup>
 
