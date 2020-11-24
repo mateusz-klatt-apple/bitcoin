@@ -58,7 +58,7 @@
 #endif
 
 //! Necessary on some platforms
-extern char** environ;
+//extern char** environ;
 
 namespace {
 
