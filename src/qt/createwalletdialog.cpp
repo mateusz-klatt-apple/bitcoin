@@ -88,3 +88,8 @@ bool CreateWalletDialog::isDescriptorWalletChecked() const
 {
     return ui->descriptor_checkbox->isChecked();
 }
+
+bool CreateWalletDialog::isBackupSeedPhraseChecked() const
+{
+    return ui->seed_checkbox->isChecked();
+}

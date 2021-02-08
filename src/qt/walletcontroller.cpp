@@ -229,7 +229,10 @@ void CreateWalletActivity::askPassphrase()
         m_passphrase_dialog = nullptr;
     });
     connect(m_passphrase_dialog, &QDialog::accepted, [this] {
-        createWallet();
+        if (m_create_wallet_dialog->isBackupSeedPhraseChecked()) {
+        } else {
+            createWallet();
+        }
     });
     connect(m_passphrase_dialog, &QDialog::rejected, [this] {
         Q_EMIT finished();
@@ -292,7 +295,10 @@ void CreateWalletActivity::create()
         if (m_create_wallet_dialog->isEncryptWalletChecked()) {
             askPassphrase();
         } else {
-            createWallet();
+            if (m_create_wallet_dialog->isBackupSeedPhraseChecked()) {
+            } else {
+                createWallet();
+            }
         }
     });
 }

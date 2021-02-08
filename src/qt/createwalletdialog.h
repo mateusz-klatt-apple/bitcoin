@@ -28,6 +28,7 @@ public:
     bool isDisablePrivateKeysChecked() const;
     bool isMakeBlankWalletChecked() const;
     bool isDescriptorWalletChecked() const;
+    bool isBackupSeedPhraseChecked() const;
 
 private:
     Ui::CreateWalletDialog *ui;
