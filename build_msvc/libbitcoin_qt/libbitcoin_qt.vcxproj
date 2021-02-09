@@ -20,6 +20,7 @@
     <ClCompile Include="..\..\src\qt\clientmodel.cpp" />
     <ClCompile Include="..\..\src\qt\coincontroldialog.cpp" />
     <ClCompile Include="..\..\src\qt\coincontroltreewidget.cpp" />
+    <ClCompile Include="..\..\src\qt\createseeddialog.cpp" />
     <ClCompile Include="..\..\src\qt\createwalletdialog.cpp" />
     <ClCompile Include="..\..\src\qt\csvmodelwriter.cpp" />
     <ClCompile Include="..\..\src\qt\editaddressdialog.cpp" />
@@ -73,6 +74,7 @@
     <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_clientmodel.cpp" />
     <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_coincontroldialog.cpp" />
     <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_coincontroltreewidget.cpp" />
+    <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_createseeddialog.cpp" />
     <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_createwalletdialog.cpp" />
     <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_csvmodelwriter.cpp" />
     <ClCompile Include="$(GeneratedFilesOutDir)\moc\moc_editaddressdialog.cpp" />
